@@ -1,7 +1,7 @@
 {
   "name": "pixel-crew",
-  "version": "0.6.3",
-  "description": "Pixel-art progress bar with the Claude mascot and a side panel that turns your subagents into a crew of characters (developer, artist, researcher, tester, Codex...).",
+  "version": "0.7.0",
+  "description": "Pixel-art progress bar with the Claude mascot and a side panel that turns your subagents into a crew of characters. Leigh's fork: improvement-council stages and personas get their own characters.",
   "author": {
     "name": "Trackszx"
   },
@@ -27,7 +27,21 @@
         "pt",
         "es"
       ]
+    },
+    "celebration": {
+      "type": "string",
+      "title": "Done celebration",
+      "description": "What the mascot does when a turn finishes well: full (jumps among confetti), quiet (a short hop, no confetti) or off.",
+      "default": "full",
+      "options": [
+        "full",
+        "quiet",
+        "off"
+      ]
     }
   },
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "dependencies": [
+    "council"
+  ]
 }

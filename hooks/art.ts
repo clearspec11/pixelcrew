@@ -14,6 +14,10 @@ export const ROLES: Record<PcRole, RoleInfo> = {
   boss: { label: "boss", color: "#6A4BE0", light: "#A28CF2" },
   tester: { label: "tester", color: "#F07A1E", light: "#F8B27A" },
   codex: { label: "codex", color: "#10A37F", light: "#6FD3B5" },
+  // council stages (see council.ts)
+  voter: { label: "voter", color: "#D4A017", light: "#EBC65E" },
+  scribe: { label: "scribe", color: "#A04FB8", light: "#C98FDA" },
+  skeptic: { label: "skeptic", color: "#1FA8C4", light: "#7BCFE0" },
 }
 
 /** One symbol per role, drawn before the bar and on each panel row. */
@@ -25,6 +29,9 @@ export const ROLE_SYMBOL: Record<PcRole, string> = {
   boss: '♛',
   tester: '✓',
   codex: '⚡',
+  voter: '☑',
+  scribe: '✒',
+  skeptic: '‽',
 }
 
 const PAL: Record<string, string> = {
@@ -37,6 +44,8 @@ const PAL: Record<string, string> = {
   V: "#F07A1E", v: "#B85A12", N: "#E8D7B5", n: "#888780",
   O: "#E6E8EB", S: "#111418", A: "#10A37F", Z: "#8A8F98", D: "#2C2F33",
   U: "#6A4BE0", u: "#4A32B0",
+  // council gear: pale lens glass
+  c: "#B9DDF3",
 }
 
 const W = 18
@@ -140,6 +149,46 @@ const GEAR: Record<Exclude<PcRole, "codex">, (g: Grid) => void> = {
     dot(g, "n", [0, 9], [1, 9], [0, 10])
     eyes(g)
   },
+  // right arm raised holding a cream ballot card high (blue header, dark
+  // tick), and a gold-and-red rosette pinned on the chest
+  voter: g => {
+    box(g, ".", 14, 15, 9, 10)
+    box(g, "X", 14, 15, 7, 8)
+    box(g, "X", 16, 17, 5, 6)
+    box(g, "N", 12, 17, 1, 4)
+    box(g, "C", 12, 17, 0, 0)
+    dot(g, "K", [16, 1], [13, 2], [15, 2], [16, 2], [13, 3], [14, 3], [15, 3], [14, 4])
+    box(g, "Q", 7, 9, 10, 12)
+    dot(g, "P", [8, 11])
+  },
+  // round white spectacles, a quill (cream feather, brown shaft) held up in
+  // the left hand and an ink pot by the right
+  scribe: g => {
+    for (const x of [5, 10]) {
+      box(g, "W", x, x + 2, 7, 10)
+      box(g, "X", x + 1, x + 1, 8, 9)
+    }
+    box(g, "W", 8, 9, 8, 8)
+    eyes(g)
+    dot(g, "N", [0, 0], [0, 1], [1, 1], [0, 2], [1, 2], [2, 2], [1, 3], [2, 3], [1, 4], [2, 4], [3, 4], [2, 5], [3, 5])
+    dot(g, "W", [1, 1], [1, 2], [2, 3], [2, 4])
+    box(g, "H", 3, 3, 6, 7)
+    dot(g, "H", [2, 8])
+    box(g, "I", 16, 17, 10, 11)
+    box(g, "Z", 16, 17, 9, 9)
+  },
+  // a big magnifying glass held up on the left (brass rim, pale lens with a
+  // glint, brown handle), one brow raised and the other eye squinting
+  skeptic: g => {
+    box(g, "q", 0, 4, 0, 4)
+    dot(g, ".", [0, 0], [4, 0], [0, 4], [4, 4])
+    box(g, "c", 1, 3, 1, 3)
+    dot(g, "W", [1, 1])
+    box(g, "H", 3, 3, 5, 8)
+    box(g, "X", 6, 6, 8, 8)
+    box(g, "E", 5, 7, 9, 9)
+    dot(g, "E", [10, 6], [11, 6], [12, 6])
+  },
 }
 
 // Codex: um robozinho de tela, personagem próprio
@@ -176,8 +225,10 @@ export type Sprite = { source: string; width: number; height: number }
  * `bob`, o quadro ímpar sobe 1 pixel: o mod troca o quadro enquanto ele
  * trabalha, então o personagem pula.
  */
-export function spriteSvg(role: PcRole | "clawd", px = 2, bob = false, frame = 0): Sprite {
+export function spriteSvg(role: PcRole | "clawd", px = 2, bob = false, frame = 0, body?: string): Sprite {
   const g = grid(role)
+  // a council persona's colour paints the body (X) in place of the clay
+  const paint = (ch: string) => (ch === "X" && body ? body : PAL[ch])
   let top = H
   let bottom = 0
   let left = W
@@ -195,7 +246,7 @@ export function spriteSvg(role: PcRole | "clawd", px = 2, bob = false, frame = 0
   let rects = ""
   g.forEach((row, r) =>
     row.forEach((ch, c) => {
-      const fill = PAL[ch]
+      const fill = paint(ch)
       if (fill) rects += `<rect x="${c}" y="${r + dy}" width="1.02" height="1.02" fill="${fill}"/>`
     }),
   )
@@ -230,7 +281,7 @@ export type Pixel = { x: number; y: number; fill: string }
  * Os pixels do mascote numa pose e num quadro, no quadro fixo de 18x16 (y de
  * -1 a 14): o SVG da faixa e o Raster do terminal desenham os mesmos.
  */
-export function mascotPixels(role: 'clawd' | 'boss', pose: Pose, frame = 0): Pixel[] {
+export function mascotPixels(role: 'clawd' | 'boss', pose: Pose, frame = 0, confetti = true): Pixel[] {
   const g = grid(role)
   // o relógio anda a 30 quadros por segundo: passos e pulo trocam a cada 6
   // quadros (5x por segundo) e o confete cai a cada 3, para o Clawd não sair
@@ -272,7 +323,7 @@ export function mascotPixels(role: 'clawd' | 'boss', pose: Pose, frame = 0): Pix
     const ch = g[y - dy]?.[x - dx]
     return ch !== undefined && ch !== '.'
   }
-  if (pose === 'jump') {
+  if (pose === 'jump' && confetti) {
     CONFETTI_X.forEach((x, i) => {
       const y = ((fall + CONFETTI_Y[i]!) % 7) - 1
       if (!body(x, y)) put(x, y, CONFETTI[i % CONFETTI.length]!)
@@ -297,8 +348,8 @@ export function mascotPixels(role: 'clawd' | 'boss', pose: Pose, frame = 0): Pix
  * ele anda pela barra sem tremer o layout. Confete, "zz" e "!" ocupam o espaço
  * acima da cabeça.
  */
-export function mascotSvg(role: 'clawd' | 'boss', pose: Pose, frame = 0, px = 2): Sprite {
-  const rects = mascotPixels(role, pose, frame)
+export function mascotSvg(role: 'clawd' | 'boss', pose: Pose, frame = 0, px = 2, confetti = true): Sprite {
+  const rects = mascotPixels(role, pose, frame, confetti)
     .map(p => `<rect x="${p.x}" y="${p.y}" width="1.02" height="1.02" fill="${p.fill}"/>`)
     .join('')
   const vh = H + 1
@@ -523,9 +574,9 @@ function linePixels(name: keyof typeof LINE_ART, body: string): [Array<string | 
  * the role's colour (the codex robot is its own drawing), five cells wide.
  * While it works its legs step; once finished it is greyed out.
  */
-export function spriteRaster(role: PcRole | 'clawd', key: string, walking = false, frame = 0, faded = false): RasterSpec {
+export function spriteRaster(role: PcRole | 'clawd', key: string, walking = false, frame = 0, faded = false, bodyColor?: string): RasterSpec {
   const name = role === 'codex' ? 'codex' : role === 'boss' ? 'boss' : walking && Math.floor(frame / 6) % 2 ? 'step' : 'clawd'
-  const body = role === 'clawd' || role === 'codex' ? CLAY : ROLES[role].color
+  const body = bodyColor ?? (role === 'clawd' || role === 'codex' ? CLAY : ROLES[role].color)
   const [top, bottom] = linePixels(name, body)
   // a finished agent greys out, its dark eyes kept
   const tone = (p: string | undefined) => (p && faded && !EYE_ON_BODY.has(p) ? fade(p) : p)

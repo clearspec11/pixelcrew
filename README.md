@@ -4,6 +4,19 @@ A pixel-art progress bar with the Claude mascot, and a side panel that turns you
 
 ![The crew](docs/crew.png)
 
+## Leigh's fork
+
+This fork (clearspec11/pixelcrew) tailors pixel-crew to an improvement-council setup. Upstream is Trackszx/pixelcrew.
+
+- **Council stages are characters.** Workflow agents labelled `stage:target` get a character for their stage: preflight and salvage the worker, propose the researcher, merge the scribe, vote the voter, build the developer, verify and regress the tester, review the skeptic.
+- **Personas keep their colour.** A label naming a persona (`propose:dot`) draws that persona in its own colour and names it in the panel ("Dot · proposing"). A seat (`build:P13`) shows as "Seat P13 · building". The personas and their colours live in `hooks/council.ts`.
+- **One band at a time.** While the council mod shows a running round above the prompt, pixel-crew steps aside. Once the round has finished, the council band gives way to new work.
+- **More words.** Walkthrough, usability, probe, smoke, live-check, sanity and GM pick the tester. Compat, survey, brief, catalog and compare pick the researcher. Mockup, sprite, palette, layout and theme pick the artist. Port, wire, migrate, patch and integrate pick the developer.
+- **Current prices and windows.** The cost estimate uses October 2026 list prices per model version, and the context gauge measures against each model's own window instead of a fixed 200K.
+- **A "Done celebration" option.** `full` (confetti), `quiet` (a short hop) or `off`, in `/config` or `pluginConfigs`.
+
+It depends on the `council` plugin from the homelab-mods marketplace.
+
 ## What it does
 
 **A progress band above the prompt.** While Claude works, the band shows what it is doing right now ("Editing register.tsx", "Running the tests"), a pixel progress bar with a light sweeping across it, and the percentage. The mascot walks along the bar, right at the edge of what is done, and the bar glides to each new value instead of jumping. When Claude delegates to subagents it becomes the **boss**: it grows, puts on a crown and cape, the bar turns purple, and a counter shows how many subagents are done (`1/3`).

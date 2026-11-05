@@ -13,19 +13,63 @@ const TITLE_MIN = 8
 import type { Pose } from './art'
 import { langOf, strings, systemLang } from './i18n'
 import type { Lang, Strings } from './i18n'
+import { parseCouncil, personaOf, STAGE_ROLE } from './council'
+import type { CouncilLabel } from './council'
 
 const PANE = 'pixel-crew-agents'
 
 // the texts in the language picked when the module loaded (see register)
 let L: Strings = strings('en')
-const CONTEXT_WINDOW = 200_000
 
-// Preço aproximado em US$ por milhão de tokens: entrada, saída, leitura de cache, escrita de cache
-const PRICES: Array<[RegExp, [number, number, number, number]]> = [
-  [/haiku/i, [1, 5, 0.1, 1.25]],
+type Price = [number, number, number, number]
+
+// US$ per million tokens: input, output, cache read, cache write (5-minute
+// writes, 1.25x input). First-party API list prices as of October 2026; the
+// first pattern that matches wins, so each version comes before its family.
+// The panel's costs are estimates: a subscription is not billed per token.
+const PRICES: Array<[RegExp, Price]> = [
+  [/fable-5-1|mythos-5-1/i, [10, 50, 0.25, 12.5]],
+  [/fable|mythos/i, [10, 50, 1, 12.5]],
+  [/opus-5-5/i, [4, 20, 0.2, 5]],
+  [/opus/i, [5, 25, 0.5, 6.25]],
+  [/sonnet-5/i, [2, 10, 0.2, 2.5]],
   [/sonnet/i, [3, 15, 0.3, 3.75]],
-  [/opus|fable/i, [5, 25, 0.5, 6.25]],
+  [/haiku-5-5/i, [0.1, 0.5, 0.01, 0.125]],
+  [/haiku/i, [1, 5, 0.1, 1.25]],
 ]
+// Haiku 5.5 charges more once a request's prompt passes 100K tokens
+const HAIKU_55_LONG: Price = [0.5, 2.5, 0.05, 0.625]
+// an unknown model is priced as Claude Code's default, Opus 5.5
+const DEFAULT_PRICE: Price = [4, 20, 0.2, 5]
+
+/** The price of one request on `model`, whose prompt was `prompt` tokens. */
+export function priceOf(model: string, prompt = 0): Price {
+  if (/haiku-5-5/i.test(model) && prompt > 100_000) return HAIKU_55_LONG
+  return PRICES.find(([re]) => re.test(model))?.[1] ?? DEFAULT_PRICE
+}
+
+/**
+ * The context window the panel measures an agent against: 1M on current
+ * models, 200K on Haiku 4.x, Opus and Sonnet 4.5 and older, and Claude 3.
+ * A `[1m]` suffix always means 1M.
+ */
+export function windowOf(model: string): number {
+  const m = model.toLowerCase()
+  if (m.includes('[1m]')) return 1_000_000
+  if (/claude-3|haiku-4/.test(m)) return 200_000
+  const v = /(opus|sonnet)-(\d+)(?:-(\d))?(?!\d)/.exec(m)
+  if (v && Number(v[2]) === 4 && Number(v[3] ?? 0) <= 5) return 200_000
+  return 1_000_000
+}
+
+// the mascot's "done" celebration: confetti, a short quiet hop, or none
+type Celebration = 'full' | 'quiet' | 'off'
+let celebration: Celebration = 'full'
+const CELEBRATE: Record<Celebration, number> = { full: 2500, quiet: 1200, off: 0 }
+
+// the council mod's band: while a round runs it carries the band and pixel-crew steps aside
+const councilBand = { plugin: 'council', key: 'band' } as const
+const councilBandHidden = { plugin: 'council', key: 'isBandHidden' } as const
 
 const tasks = atom({ plugin: 'pixel-crew', key: 'tasks' } as const, [])
 const agents = atom({ plugin: 'pixel-crew', key: 'agents' } as const, [])
@@ -40,7 +84,6 @@ const batchStart = atom({ plugin: 'pixel-crew', key: 'batchStart' } as const, 0)
 const CALM: PcFx = { celebrateUntil: 0, errorUntil: 0, asking: null }
 const fx = atom({ plugin: 'pixel-crew', key: 'fx' } as const, CALM)
 
-const CELEBRATE_MS = 2500
 const SHAKE_MS = 1200
 const ERROR = '#E24B4A'
 
@@ -81,10 +124,11 @@ type SubRole = Exclude<PcRole, 'boss' | 'codex'>
 
 // em empate, vale a ordem desta lista
 const ROLE_WORDS: Array<[SubRole, RegExp]> = [
-  ['tester', /(test|verif|\bqa\b|debug|\bbug|valid|review|revis|audit|prueb|probar|depur)/],
-  ['artist', /(design|\bdraw|desenh|diseñ|disen|dibuj|\bart|graphic|gráfic|grafic|\bimag|\bicon|ícone|logo|visual|\bui\b|\bux\b|style|estilo|\bcss|ilustr|illustr|\banim)/],
-  ['researcher', /(research|pesquis|explor|search|busca|investig|\bfind|encontr|\bdocs|analy|anális|analis|analiz|competi|concorr|\bread|\bler\b|\bplan|coorden|coordinat|architect|arquitet)/],
-  ['developer', /(build|implement|\bcode|códig|codig|\bfix|corrig|correg|arregl|refactor|refator|feature|\bapi\b|endpoint|component|página|pagina|\bpage|landing|script|develop|desenvolv|\bcri[ae]r?\b|\bcrea|create|write|escrev|escrib|constru)/],
+  // Leigh's words too: walkthrough, usability, probe, smoke, live-check, sanity, GM
+  ['tester', /(test|verif|\bqa\b|debug|\bbug|valid|review|revis|audit|prueb|probar|depur|walkthrough|walk-through|usability|\bprobe|\bsmoke|live-?check|sanity|\bgm\b)/],
+  ['artist', /(mock-?up|sprite|palette|layout|\btheme|design|\bdraw|desenh|diseñ|disen|dibuj|\bart|graphic|gráfic|grafic|\bimag|\bicon|ícone|logo|visual|\bui\b|\bux\b|style|estilo|\bcss|ilustr|illustr|\banim)/],
+  ['researcher', /(research|pesquis|explor|search|busca|investig|\bfind|encontr|\bdocs|analy|anális|analis|analiz|competi|concorr|\bread|\bler\b|\bplan|coorden|coordinat|architect|arquitet|compat|survey|\bbrief|catalog|compar|look into|\bscout|recon)/],
+  ['developer', /(build|implement|\bcode|códig|codig|\bfix|corrig|correg|arregl|refactor|refator|feature|\bapi\b|endpoint|component|página|pagina|\bpage|landing|script|develop|desenvolv|\bcri[ae]r?\b|\bcrea|create|write|escrev|escrib|constru|\bport\b|\bwire|migrat|\bpatch|integrat)/],
 ]
 
 function earliestRole(text: string): SubRole | undefined {
@@ -113,8 +157,11 @@ export function roleOf(type: string, description: string): Exclude<PcRole, 'boss
   return earliestRole(d) ?? earliestRole(t) ?? 'worker'
 }
 
-function priceOf(model: string): [number, number, number, number] {
-  return PRICES.find(([re]) => re.test(model))?.[1] ?? PRICES[2]![1]
+/** A council agent's row title: who (persona or seat) and what its stage does. */
+export function councilTitle(c: CouncilLabel, s: Strings = L): string {
+  const doing = s.stages[c.stage]
+  const who = c.persona ? personaOf(c.persona).name : c.seat ? s.seat(c.seat) : ''
+  return who ? `${who} · ${doing}` : doing.charAt(0).toUpperCase() + doing.slice(1)
 }
 
 function shortModel(model: string): string {
@@ -284,6 +331,8 @@ export const register: Register = (on, options) => {
   const fixed = choice === 'auto' ? undefined : langOf(choice)
   let lang: Lang = fixed ?? systemLang() ?? 'en'
   L = strings(lang)
+  const wanted = String(options.celebration ?? 'full')
+  celebration = wanted === 'quiet' || wanted === 'off' ? wanted : 'full'
 
   on('session.start', async ($, e, next) => {
     if (!fixed) {
@@ -394,11 +443,15 @@ export const register: Register = (on, options) => {
     const r = await next(e)
     try {
       if (r.agentId) {
+        // a council workflow agent (`propose:dot`) is drawn by its stage and persona
+        const council = parseCouncil(e.description)
         await addAgent($, {
           id: r.agentId,
-          description: e.description || e.subagentType,
+          description: council ? councilTitle(council) : e.description || e.subagentType,
           type: e.subagentType,
-          role: roleOf(e.subagentType, e.description),
+          role: council ? STAGE_ROLE[council.stage] : roleOf(e.subagentType, e.description),
+          ...(council ? { stage: council.stage } : {}),
+          ...(council?.persona ? { persona: council.persona } : {}),
           model: r.model,
           status: 'running',
           startedAt: Date.now(),
@@ -442,7 +495,8 @@ export const register: Register = (on, options) => {
     }
     if (e.agentId && r?.usage) {
       const u = r.usage as Usage
-      const [pi, po, pr, pw] = priceOf(u.model || e.model)
+      const prompt = u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens
+      const [pi, po, pr, pw] = priceOf(u.model || e.model, prompt)
       const cost =
         (u.input_tokens * pi + u.output_tokens * po + u.cache_read_input_tokens * pr + u.cache_creation_input_tokens * pw) /
         1_000_000
@@ -479,7 +533,7 @@ export const register: Register = (on, options) => {
       await update($, fx, f => ({
         ...f,
         asking: null,
-        celebrateUntil: ok && !crewBusy ? Date.now() + CELEBRATE_MS : 0,
+        celebrateUntil: ok && !crewBusy && celebration !== 'off' ? Date.now() + CELEBRATE[celebration] : 0,
       })).catch(() => {})
     }
     return next(e)
@@ -563,6 +617,9 @@ export const register: Register = (on, options) => {
   // ── Faixa acima do prompt ──────────────────────────────────────────────
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (!(await read($, bandOn))) return next(e)
+    // a council round in progress has the band: its own shows the round
+    const round = (await $.state.get(councilBand)).value
+    if (round && !round.isFinished && !(await $.state.get(councilBandHidden)).value) return next(e)
     const list = await read($, tasks)
     const crew = await read($, agents)
     const stored = await read($, main)
@@ -698,7 +755,8 @@ export const register: Register = (on, options) => {
     // o mascote anda em cima da barra, na ponta do que já está pronto: dois
     // espaçadores dividem a sobra na proporção do progresso. Enquanto delega
     // ele é o boss, de coroa e capa.
-    const sprite = delegating ? mascotSvg('boss', pose, f, 3) : mascotSvg('clawd', pose, f, 2)
+    const confetti = celebration === 'full'
+    const sprite = delegating ? mascotSvg('boss', pose, f, 3, confetti) : mascotSvg('clawd', pose, f, 2, confetti)
     return (
       <Box flexDirection="row" alignItems="center" gap={1} paddingX={1}>
         <Box width="30%" flexShrink={0} overflow="hidden">
@@ -760,6 +818,9 @@ export const register: Register = (on, options) => {
 
     const row = (a: PcAgent) => {
       const info = ROLES[a.role]
+      // a council persona keeps its own colour; the gear still says the stage
+      const persona = a.persona ? personaOf(a.persona) : undefined
+      const tint = persona?.color ?? info.color
       const doneN = a.tasks.filter(x => x.status === 'completed').length
       const ratio = a.status === 'failed' ? (ratioOf(a.tasks) ?? estimate(a.steps + a.tools)) : agentRatio(a)
       const progress = a.tasks.length
@@ -770,7 +831,7 @@ export const register: Register = (on, options) => {
             ? L.ready
             : L.failed
       const phase = a.status === 'running' ? (a.tasks.find(x => x.status === 'in_progress')?.activeForm ?? a.phase ?? L.starting) : ''
-      const ctxPct = Math.round((a.ctxTokens / CONTEXT_WINDOW) * 100)
+      const ctxPct = Math.round((a.ctxTokens / windowOf(a.model)) * 100)
       const took = fmtTime((a.endedAt ?? clock) - a.startedAt)
       const stats = a.role === 'codex' && a.steps === 0
         ? took
@@ -780,7 +841,7 @@ export const register: Register = (on, options) => {
       const sub = `${a.role === 'codex' ? 'Codex' : shortModel(a.model)}${effortLabel(a.effort)}`
       // a finished agent's row goes still and grey: no sweeping glint, the role colour faded
       const done = a.status !== 'running'
-      const barColor = done ? fade(info.color) : info.color
+      const barColor = done ? fade(tint) : tint
       const barFrame = done ? 0 : f
 
       if (isTerm) {
@@ -789,7 +850,7 @@ export const register: Register = (on, options) => {
         const { Raster } = els
         // o personagem só entra se sobrar espaço para o texto ao lado; a
         // barra ocupa o resto da linha, até o limite de colunas do Raster
-        const sprite = spriteRaster(a.role, `s-${a.id}`, !done, f, done)
+        const sprite = spriteRaster(a.role, `s-${a.id}`, !done, f, done, persona?.color)
         const width = Math.max(0, e.props.bodyColumns)
         const art = width >= sprite.columns + 1 + TEXT_MIN ? sprite : null
         const barCols = Math.min(MAX_RASTER_COLUMNS, art ? width - art.columns - 1 : width)
@@ -803,13 +864,13 @@ export const register: Register = (on, options) => {
             <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
               <Box flexDirection="row" justifyContent="space-between" gap={1}>
                 <Box flexDirection="row" gap={1} flexShrink={1} minWidth={0} overflow="hidden">
-                  <Text color={done ? fade(info.color) : info.color}>{ROLE_SYMBOL[a.role]}</Text>
+                  <Text color={done ? fade(tint) : tint}>{ROLE_SYMBOL[a.role]}</Text>
                   <Text bold wrap="truncate">{a.description}</Text>
                 </Box>
                 <Text color={markColor}>{mark}</Text>
               </Box>
               <Box flexDirection="row" gap={1}>
-                <Text color={info.color}>{info.label}</Text>
+                <Text color={tint}>{info.label}</Text>
                 <Text dimColor>{sub}</Text>
               </Box>
               <Box flexDirection="row" justifyContent="space-between" gap={1}>
@@ -825,7 +886,7 @@ export const register: Register = (on, options) => {
       }
 
       const { Svg } = els
-      const sprite = spriteSvg(a.role, 2, a.status === 'running', Math.floor(f / 9))
+      const sprite = spriteSvg(a.role, 2, a.status === 'running', Math.floor(f / 9), persona?.color)
       return (
         <Box key={`a-${a.id}`} flexDirection="row" gap={1} paddingY={1} alignItems="flex-start">
           <Box flexShrink={0} alignItems="center">
@@ -837,7 +898,7 @@ export const register: Register = (on, options) => {
               <Text color={markColor}>{mark}</Text>
             </Box>
             <Box flexDirection="row" gap={1}>
-              <Text color={info.color}>{info.label}</Text>
+              <Text color={tint}>{info.label}</Text>
               <Text dimColor>{sub}</Text>
             </Box>
             <Box flexDirection="row" justifyContent="space-between" gap={1}>

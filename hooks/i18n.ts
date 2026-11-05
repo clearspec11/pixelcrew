@@ -1,5 +1,7 @@
 // Every piece of text pixel-crew draws, in English, Portuguese and Spanish.
 
+import type { CouncilStage } from './council'
+
 export type Lang = 'en' | 'pt' | 'es'
 
 export type Strings = {
@@ -44,6 +46,10 @@ export type Strings = {
   needsPermission: string
   using: (tool: string) => string
   file: string
+  /** what each council stage is doing, as it follows a persona's name */
+  stages: Record<CouncilStage, string>
+  /** a build seat, named by its id (`P13`) */
+  seat: (id: string) => string
 }
 
 const en: Strings = {
@@ -88,6 +94,18 @@ const en: Strings = {
   needsPermission: 'Waiting for your permission',
   using: t => `Using ${t}`,
   file: 'file',
+  stages: {
+    preflight: 'preflight checks',
+    propose: 'proposing',
+    merge: 'merging proposals',
+    vote: 'voting',
+    build: 'building',
+    salvage: 'salvaging',
+    verify: 'verifying',
+    review: 'reviewing',
+    regress: 'regression check',
+  },
+  seat: id => `Seat ${id}`,
 }
 
 const pt: Strings = {
@@ -132,6 +150,18 @@ const pt: Strings = {
   needsPermission: 'Esperando sua permissão',
   using: t => `Usando ${t}`,
   file: 'arquivo',
+  stages: {
+    preflight: 'checagem inicial',
+    propose: 'propondo',
+    merge: 'juntando as propostas',
+    vote: 'votando',
+    build: 'construindo',
+    salvage: 'resgatando',
+    verify: 'verificando',
+    review: 'revisando',
+    regress: 'checagem de regressão',
+  },
+  seat: id => `Assento ${id}`,
 }
 
 const es: Strings = {
@@ -176,6 +206,18 @@ const es: Strings = {
   needsPermission: 'Esperando tu permiso',
   using: t => `Usando ${t}`,
   file: 'archivo',
+  stages: {
+    preflight: 'chequeo inicial',
+    propose: 'proponiendo',
+    merge: 'uniendo las propuestas',
+    vote: 'votando',
+    build: 'construyendo',
+    salvage: 'rescatando',
+    verify: 'verificando',
+    review: 'revisando',
+    regress: 'prueba de regresión',
+  },
+  seat: id => `Asiento ${id}`,
 }
 
 const DICTS: Record<Lang, Strings> = { en, pt, es }

@@ -2,7 +2,8 @@ import { expect, test } from 'claude-code/testing'
 
 import { bandRaster, barRaster, fade, LINE_ART, spriteRaster } from '../hooks/art'
 import { langOf, strings } from '../hooks/i18n'
-import { activityOf, estimate, glide, resetGlide, roleOf } from '../hooks/register'
+import { activityOf, councilTitle, estimate, glide, priceOf, resetGlide, roleOf, windowOf } from '../hooks/register'
+import { parseCouncil, PERSONAS } from '../hooks/council'
 
 const BAND: any = {
   isWorking: true,
@@ -605,5 +606,171 @@ test('finished agents are grey and still; running ones keep their colour', EN, a
   const finished = bars.find(s => /files/.test(String(s.props.alt)))
   expect(String(finished!.props.source)).not.toMatch(/#639922/i)
   expect(String(finished!.props.source)).toMatch(/#738769/i)
+  await ui.unmount()
+})
+
+// ── Leigh's fork ─────────────────────────────────────────────────────────
+
+test('reads council labels: stage, persona or seat', async () => {
+  expect(parseCouncil('propose:dot')).toEqual({ stage: 'propose', persona: 'dot' })
+  expect(parseCouncil('build:P13')).toEqual({ stage: 'build', seat: 'P13' })
+  expect(parseCouncil('salvage:B1')).toEqual({ stage: 'salvage', seat: 'B1' })
+  expect(parseCouncil('merge')).toEqual({ stage: 'merge' })
+  expect(parseCouncil('Build the landing page')).toBeUndefined()
+  expect(parseCouncil('review the diff')).toBeUndefined()
+  expect(parseCouncil('deploy:prod')).toBeUndefined()
+  const en = strings('en')
+  expect(councilTitle({ stage: 'vote', persona: 'vex' }, en)).toBe('Vex · voting')
+  expect(councilTitle({ stage: 'build', seat: 'P13' }, en)).toBe('Seat P13 · building')
+  expect(councilTitle({ stage: 'merge' }, en)).toBe('Merging proposals')
+  expect(councilTitle({ stage: 'propose', persona: 'nova' }, en)).toBe('Nova · proposing')
+  expect(councilTitle({ stage: 'vote', persona: 'dot' }, strings('pt'))).toBe('Dot · votando')
+})
+
+test("Leigh's words pick a role", async () => {
+  expect(roleOf('general-purpose', 'GM usability walkthrough on cc-dev')).toBe('tester')
+  expect(roleOf('general-purpose', 'Smoke the release build')).toBe('tester')
+  expect(roleOf('general-purpose', 'Probe the dice tray overlap')).toBe('tester')
+  expect(roleOf('general-purpose', 'Live-check the crate import')).toBe('tester')
+  expect(roleOf('general-purpose', 'Foundry v14 compat survey')).toBe('researcher')
+  expect(roleOf('general-purpose', 'Competitor modules and GM wishes')).toBe('researcher')
+  expect(roleOf('general-purpose', 'Mockup the fortune ticket')).toBe('artist')
+  expect(roleOf('general-purpose', 'Port the namegen to v14')).toBe('developer')
+  // the old words still work
+  expect(roleOf('general-purpose', 'Build the landing page')).toBe('developer')
+  expect(roleOf('general-purpose', 'Organize things')).toBe('worker')
+})
+
+test('prices and context windows follow the model', async () => {
+  expect(priceOf('claude-fable-5-1')).toEqual([10, 50, 0.25, 12.5])
+  expect(priceOf('claude-opus-5-5')).toEqual([4, 20, 0.2, 5])
+  expect(priceOf('claude-opus-4-8')).toEqual([5, 25, 0.5, 6.25])
+  expect(priceOf('claude-sonnet-5-5')).toEqual([2, 10, 0.2, 2.5])
+  expect(priceOf('claude-sonnet-4-6')).toEqual([3, 15, 0.3, 3.75])
+  expect(priceOf('claude-haiku-5-5')[0]).toBe(0.1)
+  expect(priceOf('claude-haiku-5-5', 150_000)[0]).toBe(0.5)
+  expect(priceOf('claude-haiku-4-5-20251001')[0]).toBe(1)
+  expect(priceOf('something-new')).toEqual([4, 20, 0.2, 5])
+  expect(windowOf('claude-opus-5-5')).toBe(1_000_000)
+  expect(windowOf('claude-fable-5-1')).toBe(1_000_000)
+  expect(windowOf('claude-opus-4-6')).toBe(1_000_000)
+  expect(windowOf('claude-haiku-4-5-20251001')).toBe(200_000)
+  expect(windowOf('claude-sonnet-4-5-20250929')).toBe(200_000)
+  expect(windowOf('claude-opus-4-20250514')).toBe(200_000)
+  expect(windowOf('claude-sonnet-4-5[1m]')).toBe(1_000_000)
+})
+
+test('a council agent shows its persona, stage character and colour', EN, async ($, on) => {
+  let n = 0
+  on('agent.spawn', async () => ({ model: 'claude-opus-5-5', agentId: 'c-' + ++n }))
+  await $.agent.spawn({ prompt: 'p', description: 'propose:dot', subagentType: 'general-purpose' } as any)
+  await $.agent.spawn({ prompt: 'p', description: 'vote:vex', subagentType: 'general-purpose' } as any)
+  await $.agent.spawn({ prompt: 'p', description: 'build:P13', subagentType: 'general-purpose' } as any)
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ plugin: 'pixel-crew', surface, component: 'Pane', props: PANE, requestId: 'pixel-crew-agents' })
+    expect(await ui.find({ text: /Dot · proposing/ })).toBeDefined()
+    expect(await ui.find({ text: /Vex · voting/ })).toBeDefined()
+    expect(await ui.find({ text: /Seat P13 · building/ })).toBeDefined()
+    // the stage picks the character, the persona its colour
+    const researcher = (await ui.findAll({ type: 'Text' })).find(t => t.text === 'researcher')
+    expect(researcher?.props.color).toBe(PERSONAS.dot!.color)
+    const voter = (await ui.findAll({ type: 'Text' })).find(t => t.text === 'voter')
+    expect(voter?.props.color).toBe(PERSONAS.vex!.color)
+    expect(await ui.find({ text: 'developer' })).toBeDefined()
+    if (surface === 'desktop') {
+      const sprites = (await ui.findAll({ type: 'Svg' })).map(s => String(s.props.source))
+      expect(sprites.some(src => src.includes(PERSONAS.dot!.color))).toBe(true)
+    }
+    await ui.unmount()
+  }
+})
+
+// stand-ins for the council mod, loaded beside pixel-crew: `/council` writes its band's state.
+// An inline plugin runs in its own environment, so each one spells its values out.
+const liveCouncil = {
+  name: 'council',
+  register: ((on: any) => {
+    on('command.run', { command: 'council' }, async ($: any) => {
+      await $.state.set({ plugin: 'council', key: 'band' }, { runId: 'wf', round: 33, mode: 'full', seats: 2, hasRegression: false, startedAt: 0, isFinished: false, agents: [] })
+      await $.state.set({ plugin: 'council', key: 'isBandHidden' }, false)
+      return { text: 'ok' }
+    })
+  }) as any,
+}
+const finishedCouncil = {
+  name: 'council',
+  register: ((on: any) => {
+    on('command.run', { command: 'council' }, async ($: any) => {
+      await $.state.set({ plugin: 'council', key: 'band' }, { runId: 'wf', round: 33, mode: 'full', seats: 2, hasRegression: false, startedAt: 0, isFinished: true, agents: [] })
+      await $.state.set({ plugin: 'council', key: 'isBandHidden' }, false)
+      return { text: 'ok' }
+    })
+  }) as any,
+}
+const hiddenCouncil = {
+  name: 'council',
+  register: ((on: any) => {
+    on('command.run', { command: 'council' }, async ($: any) => {
+      await $.state.set({ plugin: 'council', key: 'band' }, { runId: 'wf', round: 33, mode: 'full', seats: 2, hasRegression: false, startedAt: 0, isFinished: false, agents: [] })
+      await $.state.set({ plugin: 'council', key: 'isBandHidden' }, true)
+      return { text: 'ok' }
+    })
+  }) as any,
+}
+
+// what is beneath pixel-crew draws a marker, so a band that steps aside shows it
+async function councilRound($: any, on: any) {
+  on('ui.render', { component: 'AbovePrompt' }, async ($: any, e: any) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>beneath</Text>
+  })
+  await $.command.run({ command: 'council', args: '' } as any)
+}
+
+test('the band steps aside while a council round runs', { options: { language: 'en' }, plugins: [liveCouncil] }, async ($, on) => {
+  await councilRound($, on)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ plugin: 'pixel-crew', surface, component: 'AbovePrompt', props: BAND })
+    expect(await ui.find({ text: 'beneath' })).toBeDefined()
+    expect(await ui.find({ text: /Thinking/ })).toBeUndefined()
+    await ui.unmount()
+  }
+})
+
+test('the band comes back once the round finishes', { options: { language: 'en' }, plugins: [finishedCouncil] }, async ($, on) => {
+  await councilRound($, on)
+  const ui = await $.ui.mount({ plugin: 'pixel-crew', surface: 'terminal', component: 'AbovePrompt', props: BAND })
+  expect(await ui.find({ text: /Thinking/ })).toBeDefined()
+  expect(await ui.find({ text: 'beneath' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a hidden council band does not hide pixel-crew', { options: { language: 'en' }, plugins: [hiddenCouncil] }, async ($, on) => {
+  await councilRound($, on)
+  const ui = await $.ui.mount({ plugin: 'pixel-crew', surface: 'terminal', component: 'AbovePrompt', props: BAND })
+  expect(await ui.find({ text: /Thinking/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a quiet celebration hops without confetti', { options: { language: 'en', celebration: 'quiet' } }, async ($, on) => {
+  on('turn.complete', async () => ({ text: '' }))
+  await $.turn.complete({ answer: 'ok', durationMs: 10, isAborted: false, turnId: 't0', reason: 'answer' } as any)
+  const ui = await $.ui.mount({ plugin: 'pixel-crew', surface: 'desktop', component: 'AbovePrompt', props: { ...BAND, isWorking: false } })
+  expect(await ui.find({ text: /^Done$/ })).toBeDefined()
+  const mascot = (await ui.findAll({ type: 'Svg' })).find(s => s.props.alt === 'Claude mascot')
+  expect(String(mascot?.props.source)).not.toMatch(CONFETTI)
+  await ui.unmount()
+})
+
+test('celebration off skips the done moment', { options: { language: 'en', celebration: 'off' } }, async ($, on) => {
+  ;(on as any)('ui.render', { component: 'AbovePrompt' }, async ($: any, e: any) => {
+    const { Box } = $.ui.resolve(e)
+    return <Box />
+  })
+  on('turn.complete', async () => ({ text: '' }))
+  await $.turn.complete({ answer: 'ok', durationMs: 10, isAborted: false, turnId: 't0', reason: 'answer' } as any)
+  const ui = await $.ui.mount({ plugin: 'pixel-crew', surface: 'desktop', component: 'AbovePrompt', props: { ...BAND, isWorking: false } })
+  expect(await ui.find({ text: /^Done$/ })).toBeUndefined()
   await ui.unmount()
 })

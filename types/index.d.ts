@@ -15,6 +15,12 @@ export type PcRole =
   | 'boss'
   | 'tester'
   | 'codex'
+  /** council: casting a ballot in the vote stage */
+  | 'voter'
+  /** council: merging the proposals into one slate */
+  | 'scribe'
+  /** council: the review stage's skeptic */
+  | 'skeptic'
 
 export type PcAgent = {
   id: string
@@ -33,6 +39,10 @@ export type PcAgent = {
   tools: number
   phase?: string
   tasks: PcTask[]
+  /** a council workflow agent's stage, from its `stage:target` label */
+  stage?: string
+  /** a council persona's key (`dot`, `vex`), when the label names one */
+  persona?: string
 }
 
 /** O que o agent principal (o Claude da conversa) está fazendo no turno atual. */
