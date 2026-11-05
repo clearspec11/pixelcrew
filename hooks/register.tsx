@@ -777,10 +777,13 @@ export const register: Register = (on, options) => {
       // com sua coluna de espaço; o que não cabe sai, e sem lugar nem para a
       // porcentagem a faixa dá a vez a quem está por baixo
       const width = Math.max(0, e.props.bodyColumns)
+      // esperando você, o título faz o papel da porcentagem: guarda a primeira
+      // coluna antes da contagem e da equipe, para o aviso nunca sumir
       const pctShown = alerting ? '' : pct
-      if (width < (pctShown.length || 1)) return next(e)
+      const reserved = pctShown.length || 1
+      if (width < reserved) return next(e)
       const crewLabel = `×${view.crew}`
-      let budget = width - pctShown.length
+      let budget = width - reserved
       const showCount = count !== '' && budget >= count.length + 1
       if (showCount) budget -= count.length + 1
       const showCrew = view.crew > 0 && budget >= crewLabel.length + 1
@@ -795,8 +798,8 @@ export const register: Register = (on, options) => {
       if (showIcon) budget -= icon.length + 1
       // o título (e a arte ao lado dele) ocupa o resto, menos a coluna antes da
       // porcentagem; sem porcentagem, essa coluna também é dele
-      const showTitle = budget >= 1
-      const room = pctShown ? budget - 1 : budget
+      const showTitle = alerting || budget >= 1
+      const room = pctShown ? budget - 1 : budget + reserved
       const columns = Math.min(60, Math.floor(room * 0.6), room - 1 - TITLE_MIN)
       const art = columns < BAND_MIN ? null : bandRaster({
         key: 'band',

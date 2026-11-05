@@ -345,6 +345,46 @@ test('the terminal band says it needs you in amber, without the %', EN, async ($
   await ui.unmount()
 })
 
+// at every width the waiting title outranks the count and the crew button: a
+// narrow band that showed only "1/2" would hide that Claude needs you
+async function alertAtEveryWidth($: any, on: any, setup: (on: any) => Promise<void>) {
+  ;(on as any)('tool.check', async (_: any, e: any, next: any) => (e.tool === 'Bash' ? { decision: 'ask' } : next(e)))
+  await setup(on)
+  await ($.tool.check as any)({ tool: 'Bash', input: { command: 'ls build' }, tool_use_id: 'tu-1' })
+  for (let bodyColumns = 1; bodyColumns <= 20; bodyColumns++) {
+    const ui = await $.ui.mount({ plugin: 'pixel-crew', surface: 'terminal', component: 'AbovePrompt', props: { ...BAND, isWorking: false, bodyColumns } })
+    const title = await ui.find({ type: 'Text', text: /Waiting for your permission/ })
+    if (!title) throw new Error(`no waiting title at ${bodyColumns} columns`)
+    expect(await ui.find({ type: 'Text', text: /%/ })).toBeUndefined()
+    await ui.unmount()
+  }
+}
+
+test('the waiting title never gives way to the count', EN, async ($, on) => {
+  resetGlide()
+  await alertAtEveryWidth($, on, async on => {
+    on('tool.call', { tool: 'TodoWrite' }, async () => ({ result: { oldTodos: [], newTodos: [] } }))
+    await ($.tool.call as any)({
+      tool: 'TodoWrite',
+      input: { todos: [{ content: 'First', status: 'completed', activeForm: 'Doing the first' }, { content: 'Second', status: 'in_progress', activeForm: 'Doing the second' }] },
+    } as any)
+  })
+})
+
+test('the waiting title never gives way to the crew button', EN, async ($, on) => {
+  await alertAtEveryWidth($, on, async on => {
+    let n = 0
+    on('agent.spawn', async () => ({ model: 'claude-haiku-5-5', agentId: 'ag-' + ++n }))
+    on('turn.complete', async () => ({ text: '' }))
+    await $.agent.spawn({ prompt: 'a', description: 'Build the page', subagentType: 'general-purpose' } as any)
+    await $.turn.complete({ agentId: 'ag-1', answer: 'ok', durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer' } as any)
+  })
+})
+
+test('the waiting title never gives way to the count and crew together', EN, async ($, on) => {
+  await alertAtEveryWidth($, on, async on => boss($, on))
+})
+
 test('a failed tool turns the bar red for a moment', EN, async ($, on) => {
   ;(on as any)('tool.call', { tool: 'Bash' }, async () => ({ isError: true, result: 'boom', text: 'boom' }))
   await ($.tool.call as any)({ tool: 'Bash', input: { command: 'exit 1', description: 'Run the build' } })
