@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { bandRaster, barRaster, barSvg, CLAY, fade, LINE_ART, spriteRaster } from '../hooks/art'
+import { bandRaster, barRaster, barSvg, CLAY, fade, LINE_ART, mascotSvg, spriteRaster } from '../hooks/art'
 import { langOf, strings } from '../hooks/i18n'
 import { activityOf, councilTitle, estimate, glide, priceOf, resetGlide, roleOf, statusLine, windowOf } from '../hooks/register'
 import { parseCouncil, PERSONAS } from '../hooks/council'
@@ -184,6 +184,19 @@ test('the desktop band keeps its height when Claude becomes the boss', EN, async
   const chief = await mascot({ ...BAND, isWorking: false })
   expect(chief).toEqual({ alt: 'Claude as the boss', width: 36, height: 32 })
   expect(chief.height).toBe(clawd.height)
+})
+
+// the band's height is the mascot's: no role, mood, frame or confetti may change it
+test('the mascot keeps one size in every role, mood and frame', () => {
+  const sizes = new Set<string>()
+  for (const role of ['clawd', 'boss'] as const)
+    for (const pose of ['walk', 'jump', 'sleep', 'alert', 'shake'] as const)
+      for (const confetti of [false, true])
+        for (let f = 0; f < 40; f++) {
+          const s = mascotSvg(role, pose, f, 2, confetti)
+          sizes.add(`${s.width}x${s.height}`)
+        }
+  expect([...sizes]).toEqual(['36x32'])
 })
 
 test('the band speaks Portuguese', PT, async ($, on) => {
