@@ -847,7 +847,7 @@ export const register: Register = (on, options) => {
             <Box flexGrow={1 - ratio} flexShrink={1} />
           </Box>
           <Box overflow="hidden" justifyContent="center">
-            <Svg source={barSvg({ ratio, color, frame: f })} alt={L.altProgress(pct)} height={12} />
+            <Svg source={barSvg({ ratio, color, frame: f })} alt={L.altProgress(pct)} height={6} />
           </Box>
         </Box>
         <Box flexShrink={0} flexDirection="row" gap={1} alignItems="center">

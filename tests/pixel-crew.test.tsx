@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { bandRaster, barRaster, fade, LINE_ART, spriteRaster } from '../hooks/art'
+import { bandRaster, barRaster, barSvg, CLAY, fade, LINE_ART, spriteRaster } from '../hooks/art'
 import { langOf, strings } from '../hooks/i18n'
 import { activityOf, councilTitle, estimate, glide, priceOf, resetGlide, roleOf, statusLine, windowOf } from '../hooks/register'
 import { parseCouncil, PERSONAS } from '../hooks/council'
@@ -845,4 +845,97 @@ test('the status line says what the band says', async () => {
   expect(statusLine({ ...base, title: 'Waiting for 2 agents', pose: 'walk', delegating: true, count: '1/3' } as any)).toBe('♛ Waiting for 2 agents · 45% · 1/3')
   expect(statusLine({ ...base, title: 'Waiting for your permission', pose: 'alert' } as any)).toBe('! Waiting for your permission')
   expect(statusLine({ ...base, title: 'Done', pose: 'jump', target: 1 } as any)).toBe('✦ Done · 100%')
+})
+
+// ── The slim desktop bar ─────────────────────────────────────────────────
+// The desktop bar is two pixel rows (highlight over fill) like the terminal's,
+// and its empty track is the bar's own colour, see-through, not a fixed dark tone.
+
+const trackOf = (src: string) => {
+  const m = /<rect x="0" y="0" width="60" height="2" fill="(#[0-9A-Fa-f]{6})" fill-opacity="([\d.]+)"\/>/.exec(src)
+  expect(m).not.toBeNull()
+  return { fill: m![1]!, alpha: Number(m![2]) }
+}
+const lum = (rgb: number[]) => {
+  const [r, g, b] = rgb.map(v => (v /= 255) <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)
+  return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!
+}
+const rgbOf = (hex: string) => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16))
+const contrast = (a: number[], b: number[]) => {
+  const [x, y] = [lum(a), lum(b)]
+  return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05)
+}
+/** the track as the eye sees it: its colour at its opacity over the card */
+const trackContrast = (src: string, card: string) => {
+  const { fill, alpha } = trackOf(src)
+  const bg = rgbOf(card)
+  const seen = rgbOf(fill).map((v, i) => v * alpha + bg[i]! * (1 - alpha))
+  return contrast(seen, bg)
+}
+
+test('the desktop band bar is 6pt tall with no fixed dark track', EN, async ($, on) => {
+  const ui = await $.ui.mount({ plugin: 'pixel-crew', surface: 'desktop', component: 'AbovePrompt', props: BAND })
+  const bar = (await ui.findAll({ type: 'Svg' })).find(s => /progress/i.test(String(s.props.alt)))
+  expect(bar).toBeDefined()
+  expect(bar!.props.height).toBe(6)
+  expect(String(bar!.props.source)).not.toMatch(/#2A2725/i)
+  await ui.unmount()
+})
+
+test('the desktop bar is two pixel rows with a see-through track in the bar colour', async () => {
+  const src = barSvg({ ratio: 0, color: CLAY })
+  expect(src).not.toMatch(/#2A2725/i)
+  expect(/viewBox="([^"]+)"/.exec(src)![1]).toBe('0 0 60 2')
+  const t = trackOf(src)
+  expect(t.fill).toBe(CLAY)
+  expect(t.alpha).toBeGreaterThanOrEqual(0.15)
+  expect(t.alpha).toBeLessThanOrEqual(0.35)
+  // the error red tints its own track
+  expect(trackOf(barSvg({ ratio: 0.4, color: '#E24B4A' })).fill).toBe('#E24B4A')
+  // a finished (still) bar keeps at least as much track
+  const done = trackOf(barSvg({ ratio: 1, color: fade('#639922'), still: true }))
+  expect(done.fill).toBe(fade('#639922'))
+  expect(done.alpha).toBeGreaterThanOrEqual(t.alpha)
+  expect(done.alpha).toBeLessThanOrEqual(0.35)
+})
+
+test('an empty desktop bar still shows its track on dark and light cards, without a heavy slab', async () => {
+  const src = barSvg({ ratio: 0, color: CLAY })
+  for (const card of ['#262624', '#252525', '#FFFFFF']) expect(trackContrast(src, card)).toBeGreaterThanOrEqual(1.4)
+  expect(trackContrast(src, '#FFFFFF')).toBeLessThan(3)
+  // a finished pane bar, greyed, keeps a visible track on the dark card
+  expect(trackContrast(barSvg({ ratio: 0, color: fade('#639922'), still: true }), '#252525')).toBeGreaterThanOrEqual(1.4)
+})
+
+test('the indeterminate desktop bar moves and stays inside its 60 columns', async () => {
+  const a = barSvg({ ratio: null, color: CLAY, frame: 0 })
+  const b = barSvg({ ratio: null, color: CLAY, frame: 30 })
+  expect(a).not.toBe(b)
+  for (const src of [a, b])
+    for (const m of src.matchAll(/<rect x="(-?\d+)" y="(\d+)" width="(\d+)" height="(\d+)"/g)) {
+      expect(Number(m[1])).toBeGreaterThanOrEqual(0)
+      expect(Number(m[1]) + Number(m[3])).toBeLessThanOrEqual(60)
+      expect(Number(m[2]) + Number(m[4])).toBeLessThanOrEqual(2)
+    }
+})
+
+test('the desktop and terminal bars draw the same pixels', async () => {
+  // paint the svg's rects onto a 60x2 grid; the track rect (with opacity) stays empty
+  const paint = (src: string) => {
+    const grid: Array<Array<number | undefined>> = [Array(60).fill(undefined), Array(60).fill(undefined)]
+    for (const m of src.matchAll(/<rect x="(\d+)" y="(\d+)" width="(\d+)" height="(\d+)" fill="#([0-9a-fA-F]{6})"(\s+fill-opacity)?/g)) {
+      if (m[6]) continue
+      for (let y = +m[2]!; y < +m[2]! + +m[4]!; y++) for (let x = +m[1]!; x < +m[1]! + +m[3]!; x++) grid[y]![x] = parseInt(m[5]!, 16)
+    }
+    return grid
+  }
+  const TRACK = 0x2a2725
+  for (const [ratio, frame] of [[0.5, 0], [0.5, 7], [1, 13], [0.25, 3], [null, 0], [null, 30]] as const) {
+    const svg = paint(barSvg({ ratio, color: CLAY, frame }))
+    const cells = decodeCells(barRaster({ key: 'b', columns: 60, ratio, color: CLAY, frame }).cells)
+    cells.forEach(([, fg, bg], x) => {
+      expect(svg[0]![x]).toBe(fg === TRACK ? undefined : fg)
+      expect(svg[1]![x]).toBe(bg === TRACK ? undefined : bg)
+    })
+  }
 })
