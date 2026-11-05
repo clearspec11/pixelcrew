@@ -267,9 +267,81 @@ test('Claude raises a hand while a question waits for you', EN, async ($, on) =>
 
 test('a permission prompt shows on the band', PT, async ($, on) => {
   ;(on as any)('tool.check', async () => ({ decision: 'ask' }))
-  await ($.tool.check as any)({ tool: 'Bash', input: { command: 'rm -rf build' }, tool_use_id: 'tu-1' })
-  const ui = await $.ui.mount({ plugin: 'pixel-crew', surface: 'desktop', component: 'AbovePrompt', props: BAND })
-  expect(await ui.find({ text: /Esperando sua permissão/ })).toBeDefined()
+  // beneath pixel-crew, a stand-in for the tool: nothing really runs
+  ;(on as any)('tool.call', { tool: 'Bash' }, async () => ({ result: 'ok', text: 'ok' }))
+  const input = { command: 'ls build' }
+  await ($.tool.check as any)({ tool: 'Bash', input, tool_use_id: 'tu-1' })
+  const mount = () => $.ui.mount({ plugin: 'pixel-crew', surface: 'desktop', component: 'AbovePrompt', props: BAND })
+  const barOf = async (ui: any) => String((await ui.findAll({ type: 'Svg' })).find((s: any) => /progress/i.test(String(s.props.alt)))!.props.source)
+  // waiting for you: the bar and the title turn amber, the % steps aside
+  let ui = await mount()
+  const title = await ui.find({ type: 'Text', text: /Esperando sua permissão/ })
+  expect(title).toBeDefined()
+  expect(title!.props.color).toBe('#F5C542')
+  expect(await barOf(ui)).toContain('#F5C542')
+  expect(await ui.find({ type: 'Text', text: /%/ })).toBeUndefined()
+  await ui.unmount()
+
+  // allowed and run: the amber goes and the % is back
+  await ($.tool.call as any)({ tool: 'Bash', input, tool_use_id: 'tu-1' })
+  ui = await mount()
+  expect(await ui.find({ text: /Esperando sua permissão/ })).toBeUndefined()
+  expect(await barOf(ui)).not.toContain('#F5C542')
+  expect(await ui.find({ type: 'Text', text: /^\d+%$/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the terminal band says it needs you in amber, without the %', EN, async ($, on) => {
+  // half the list done, so the bar has a fill to colour
+  resetGlide()
+  ;(on as any)('tool.call', { tool: 'TodoWrite' }, async () => ({ result: { oldTodos: [], newTodos: [] } }))
+  // only the Bash command asks; the list goes through as usual
+  ;(on as any)('tool.check', async (_: any, e: any, next: any) => (e.tool === 'Bash' ? { decision: 'ask' } : next(e)))
+  await ($.tool.call as any)({
+    tool: 'TodoWrite',
+    input: {
+      todos: [
+        { content: 'First', status: 'completed', activeForm: 'Doing the first' },
+        { content: 'Second', status: 'in_progress', activeForm: 'Doing the second' },
+      ],
+    },
+  } as any)
+  await ($.tool.check as any)({ tool: 'Bash', input: { command: 'ls build' }, tool_use_id: 'tu-1' })
+  const mount = (bodyColumns: number) =>
+    $.ui.mount({ plugin: 'pixel-crew', surface: 'terminal', component: 'AbovePrompt', props: { ...BAND, bodyColumns } })
+  let ui = await mount(40)
+  const title = await ui.find({ type: 'Text', text: /Waiting for your permission/ })
+  expect(title).toBeDefined()
+  expect(title!.props.color).toBe('#F5C542')
+  expect(await ui.find({ type: 'Text', text: /!/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /%/ })).toBeUndefined()
+  // the count stays: it still says how far the list is
+  expect(await ui.find({ text: /^1\/2$/ })).toBeDefined()
+  const raster = await ui.find({ type: 'Raster' })
+  expect(raster).toBeDefined()
+  const colors = new Set(decodeCells(String(raster!.props.cells)).flatMap(([, fg, bg]) => [fg, bg]))
+  expect(colors.has(0xf5c542)).toBe(true)
+  await ui.unmount()
+  // with no % the row still fits: each thing after the title costs its width and a gap
+  for (const bodyColumns of [2, 8, 16, 30, 100]) {
+    ui = await mount(bodyColumns)
+    const rasters = await ui.findAll({ type: 'Raster' })
+    const extras = [
+      ...(await ui.findAll({ text: /^\d+\/\d+$/ })).map(t => String(t.text).length),
+      ...(await ui.findAll({ type: 'Button' })).map(b => String(b.props.label).length),
+      ...rasters.map(r => Number(r.props.columns)),
+      ...(await ui.findAll({ type: 'Text', text: /!$/ })).map(t => String(t.text).length),
+    ]
+    const used = extras.reduce((a, w) => a + w + 1, 0)
+    expect(used).toBeLessThanOrEqual(bodyColumns)
+    if (rasters.length) expect(bodyColumns - used).toBeGreaterThanOrEqual(8)
+    expect(await ui.find({ type: 'Text', text: /%/ })).toBeUndefined()
+    await ui.unmount()
+  }
+  // the freed % column keeps the band up where a % alone would not fit
+  ui = await mount(1)
+  expect(await ui.find({ type: 'Text', text: /%/ })).toBeUndefined()
+  expect(await ui.find({ text: /Waiting for your permission/ })).toBeDefined()
   await ui.unmount()
 })
 

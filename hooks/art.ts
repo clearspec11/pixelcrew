@@ -3,6 +3,8 @@ import type { PcRole } from '../types'
 // Paleta "Argila Claude" da barra principal
 export const CLAY = '#D97757'
 export const CLAY_LIGHT = '#E8957A'
+// o âmbar do "!" do mascote: a barra e o título quando o Claude espera você
+export const ALERT = '#F5C542'
 
 export type RoleInfo = { label: string; color: string; light: string }
 
@@ -37,7 +39,7 @@ export const ROLE_SYMBOL: Record<PcRole, string> = {
 const PAL: Record<string, string> = {
   X: CLAY, E: "#1F1410",
   Y: "#F2C230", y: "#C99A1E", J: "#F08A24", L: "#FFF6C8",
-  Q: "#F5C542", q: "#B8861A", R: "#E24B4A", I: "#534AB7",
+  Q: ALERT, q: "#B8861A", R: "#E24B4A", I: "#534AB7",
   W: "#F4F4F4", K: "#2A2E36", k: "#4A505C", G: "#C9CCD1", g: "#9A9EA6",
   P: "#D93A3A", p: "#A32626", C: "#3B8FE0", H: "#8A5A2B",
   F: "#9A6A3A", f: "#7A4F28", M: "#FFE9A8",
