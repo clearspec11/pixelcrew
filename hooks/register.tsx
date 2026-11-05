@@ -759,6 +759,9 @@ export const register: Register = (on, options) => {
     // esperando você (permissão ou pergunta): barra e título em âmbar, e sem
     // porcentagem, que agora não importa (como na linha de status)
     const alerting = pose === 'alert'
+    // o texto usa o âmbar do tema ('warning'), não o hex da barra: #F5C542 em
+    // texto some no tema claro (1,6:1 no branco), e a chave segue o tema de quem lê
+    const alertInk = 'warning'
 
     const color = shaking ? ERROR : alerting ? ALERT : delegating ? ROLES.boss.color : CLAY
     const els: any = $.ui.resolve(e)
@@ -793,7 +796,7 @@ export const register: Register = (on, options) => {
       const mood = { walk: '', jump: '✦', sleep: 'zz', alert: '!', shake: '✗' }[pose]
       const who = delegating ? 'boss' : view.role
       const icon = [who ? ROLE_SYMBOL[who] : '', mood].filter(Boolean).join(' ')
-      const iconColor = shaking || alerting || !who ? color : ROLES[who].color
+      const iconColor = shaking ? color : alerting ? alertInk : !who ? color : ROLES[who].color
       const showIcon = icon !== '' && budget >= icon.length + 1 + 1 + TITLE_MIN
       if (showIcon) budget -= icon.length + 1
       // o título (e a arte ao lado dele) ocupa o resto, menos a coluna antes da
@@ -814,7 +817,7 @@ export const register: Register = (on, options) => {
         <Box flexDirection="row" gap={1}>
           {showTitle && (
             <Box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
-              <Text bold wrap="truncate" color={alerting ? ALERT : undefined}>{title}</Text>
+              <Text bold wrap="truncate" color={alerting ? alertInk : undefined}>{title}</Text>
             </Box>
           )}
           {showIcon && <Text color={iconColor}>{icon}</Text>}
@@ -840,7 +843,7 @@ export const register: Register = (on, options) => {
     return (
       <Box flexDirection="row" alignItems="center" gap={1} paddingX={1}>
         <Box width="30%" flexShrink={0} overflow="hidden">
-          <Text bold wrap="truncate" color={alerting ? ALERT : undefined}>{title}</Text>
+          <Text bold wrap="truncate" color={alerting ? alertInk : undefined}>{title}</Text>
         </Box>
         <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
           <Box flexDirection="row" alignItems="flex-end">

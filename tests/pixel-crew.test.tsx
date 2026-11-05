@@ -277,7 +277,7 @@ test('a permission prompt shows on the band', PT, async ($, on) => {
   let ui = await mount()
   const title = await ui.find({ type: 'Text', text: /Esperando sua permissão/ })
   expect(title).toBeDefined()
-  expect(title!.props.color).toBe('#F5C542')
+  expect(title!.props.color).toBe('warning')
   expect(await barOf(ui)).toContain('#F5C542')
   expect(await ui.find({ type: 'Text', text: /%/ })).toBeUndefined()
   await ui.unmount()
@@ -312,8 +312,9 @@ test('the terminal band says it needs you in amber, without the %', EN, async ($
   let ui = await mount(40)
   const title = await ui.find({ type: 'Text', text: /Waiting for your permission/ })
   expect(title).toBeDefined()
-  expect(title!.props.color).toBe('#F5C542')
-  expect(await ui.find({ type: 'Text', text: /!/ })).toBeDefined()
+  expect(title!.props.color).toBe('warning')
+  // the "!" matches the title: the theme's amber, readable on a light terminal too
+  expect((await ui.find({ type: 'Text', text: /!/ }))?.props.color).toBe('warning')
   expect(await ui.find({ type: 'Text', text: /%/ })).toBeUndefined()
   // the count stays: it still says how far the list is
   expect(await ui.find({ text: /^1\/2$/ })).toBeDefined()
