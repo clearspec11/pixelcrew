@@ -1,6 +1,6 @@
 {
-  "name": "pixelcrew",
-  "description": "Pixel-art progress bar and subagent crew panel for Claude Code",
-  "owner": { "name": "Trackszx" },
+  "name": "pixelcrew-leigh",
+  "description": "Leigh's fork of pixel-crew: pixel-art progress band and subagent crew panel, tailored for the improvement council",
+  "owner": { "name": "Leigh" },
   "plugins": [{ "name": "pixel-crew", "source": "./" }]
 }
