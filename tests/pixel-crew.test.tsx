@@ -164,6 +164,28 @@ test('Claude becomes the boss and counts finished subagents', EN, async ($, on) 
   }
 })
 
+test('the desktop band keeps its height when Claude becomes the boss', EN, async ($, on) => {
+  const mascot = async (props: any) => {
+    const ui = await $.ui.mount({ plugin: 'pixel-crew', surface: 'desktop', component: 'AbovePrompt', props })
+    const svg = (await ui.findAll({ type: 'Svg' })).find(s => /^Claude (mascot|as the boss)$/.test(String(s.props.alt)))
+    await ui.unmount()
+    expect(svg).toBeDefined()
+    return { alt: svg!.props.alt, width: svg!.props.width, height: svg!.props.height }
+  }
+  // the hooks go in before the first mount, so this is boss() split around it
+  let n = 0
+  on('agent.spawn', async () => ({ model: 'claude-haiku-5-5', agentId: 'ag-' + ++n }))
+  on('turn.complete', async () => ({ text: '' }))
+  const clawd = await mascot(BAND)
+  expect(clawd).toEqual({ alt: 'Claude mascot', width: 36, height: 32 })
+  await $.agent.spawn({ prompt: 'a', description: 'Build the page', subagentType: 'general-purpose' } as any)
+  await $.agent.spawn({ prompt: 'b', description: 'Design the logo', subagentType: 'general-purpose' } as any)
+  await $.turn.complete({ agentId: 'ag-1', answer: 'ok', durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer' } as any)
+  const chief = await mascot({ ...BAND, isWorking: false })
+  expect(chief).toEqual({ alt: 'Claude as the boss', width: 36, height: 32 })
+  expect(chief.height).toBe(clawd.height)
+})
+
 test('the band speaks Portuguese', PT, async ($, on) => {
   await boss($, on)
   const ui = await $.ui.mount({ plugin: 'pixel-crew', surface: 'desktop', component: 'AbovePrompt', props: { ...BAND, isWorking: false } })

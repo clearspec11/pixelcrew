@@ -825,9 +825,10 @@ export const register: Register = (on, options) => {
     const { Svg } = els
     // o mascote anda em cima da barra, na ponta do que já está pronto: dois
     // espaçadores dividem a sobra na proporção do progresso. Enquanto delega
-    // ele é o boss, de coroa e capa.
+    // ele é o boss, de coroa e capa. O boss usa o mesmo px do Clawd: a faixa
+    // não pode mudar de altura quando ele delega (o terminal também não muda).
     const confetti = celebration === 'full'
-    const sprite = delegating ? mascotSvg('boss', pose, f, 3, confetti) : mascotSvg('clawd', pose, f, 2, confetti)
+    const sprite = mascotSvg(delegating ? 'boss' : 'clawd', pose, f, 2, confetti)
     return (
       <Box flexDirection="row" alignItems="center" gap={1} paddingX={1}>
         <Box width="30%" flexShrink={0} overflow="hidden">
