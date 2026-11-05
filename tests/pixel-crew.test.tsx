@@ -282,12 +282,16 @@ test('/crew-bar turns the band off and on', EN, async ($, on) => {
   expect((await run('on')).text).toBe('Progress band on')
 })
 
-test('/crew says why the pane is not drawn instead of claiming it opened', EN, async ($, on) => {
+test('/crew returns the crew as text when no surface draws the pane', EN, async ($, on) => {
   ;(on as any)('ui.open', () => ({ value: { isPlaced: false, reason: 'no-surface' } }))
-  on('session.surfaces', () => ({ value: [] }))
+  await boss($, on)
   const out = await ($.command.run as any)({ command: 'crew', args: '' })
-  expect(out.text).toMatch(/not drawn here \(no-surface\)/)
-  expect(out.text).toMatch(/attached surfaces: none/)
+  expect(out.text).toMatch(/No surface draws the Agents panel here/)
+  expect(out.text).toMatch(/Running · 1/)
+  expect(out.text).toMatch(/● Design the logo — /)
+  expect(out.text).toMatch(/Finished · 1/)
+  expect(out.text).toMatch(/✓ Build the page — /)
+  expect(out.text).toMatch(/Cost ≈?\$/)
 })
 
 test('/crew reports the pane opened when a surface places it', EN, async ($, on) => {

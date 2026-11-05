@@ -545,8 +545,7 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'crew' }, async $ => {
     const opened = await $.ui.open({ id: PANE, title: 'Agents' })
     if (opened.isPlaced) return { text: L.paneOpened }
-    const surfaces = await $.session.surfaces()
-    return { text: L.paneWaiting(String(opened.reason), surfaces.join(', ')) }
+    return { text: crewText(await read($, agents), await read($, now), await read($, tasks)) }
   })
 
   // /crew-bar alterna; /crew-bar on|off (ou ligar/desligar, activar/desactivar) escolhe
@@ -860,6 +859,55 @@ export const register: Register = (on, options) => {
     )
   })
 
+  // o que uma linha diz de um agent, para o painel e para o texto do /crew
+  const facts = (a: PcAgent, clock: number) => {
+    const doneN = a.tasks.filter(x => x.status === 'completed').length
+    const progress = a.tasks.length
+      ? `${doneN}/${a.tasks.length}`
+      : a.status === 'running'
+        ? L.actions(a.tools)
+        : a.status === 'done'
+          ? L.ready
+          : L.failed
+    const phase = a.status === 'running' ? (a.tasks.find(x => x.status === 'in_progress')?.activeForm ?? a.phase ?? L.starting) : ''
+    const ctxPct = Math.round((a.ctxTokens / windowOf(a.model)) * 100)
+    const took = fmtTime((a.endedAt ?? clock) - a.startedAt)
+    const stats = a.role === 'codex' && a.steps === 0
+      ? took
+      : `ctx ${ctxPct}%  ${fmtTokens(a.tokens)} ${fmtCost(a.costUsd)} ${took}`
+    const mark = a.status === 'running' ? '●' : a.status === 'done' ? '✓' : '✗'
+    const sub = `${a.role === 'codex' ? 'Codex' : shortModel(a.model)}${effortLabel(a.effort)}`
+    return { progress, phase, stats, mark, sub }
+  }
+
+  // o painel em texto, para quem vê a sessão de fora (telefone, web, app
+  // remoto): nenhuma superfície desenha painéis ali, só o texto do comando chega
+  const crewText = (crew: PcAgent[], t: number, mainTasks: { status: string; subject?: string }[]) => {
+    const clock = Math.max(t, Date.now())
+    const running = crew.filter(a => a.status === 'running')
+    const finished = crew.filter(a => a.status !== 'running')
+    const cost = crew.reduce((s, a) => s + a.costUsd, 0)
+    const tokensTotal = crew.reduce((s, a) => s + a.tokens, 0)
+    const first = crew.reduce((m, a) => Math.min(m, a.startedAt), Infinity)
+    const last = running.length ? clock : crew.reduce((m, a) => Math.max(m, a.endedAt ?? a.startedAt), 0)
+    const elapsed = crew.length ? last - first : 0
+    const kit = mainTasks.find(x => x.status === 'in_progress')?.subject ?? (crew.length ? L.team : L.noAgentsYet)
+    const line = (a: PcAgent) => {
+      const { progress, phase, stats, mark, sub } = facts(a, clock)
+      const label = (a.persona ? personaOf(a.persona)?.name : undefined) ?? ROLES[a.role].label
+      return `${mark} ${a.description} — ${label} · ${sub} · ${progress}${phase ? ` · ${phase}` : ''} · ${stats.replace(/\s+/g, ' ')}`
+    }
+    const out = [
+      L.paneText,
+      kit,
+      `${L.cost} ${fmtCost(cost)} · ${L.tokens} ${fmtTokens(tokensTotal)} · ${L.time} ${fmtTime(elapsed)}`,
+      L.running(running.length),
+      ...(running.length ? running.map(line) : [L.nobodyWorking]),
+    ]
+    if (finished.length) out.push(L.finished(finished.length), ...finished.slice().reverse().map(line))
+    return out.join('\n')
+  }
+
   // ── Painel lateral dos agents ─────────────────────────────────────────
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const crew = await read($, agents)
@@ -893,24 +941,9 @@ export const register: Register = (on, options) => {
       // a council persona keeps its own colour; the gear still says the stage
       const persona = a.persona ? personaOf(a.persona) : undefined
       const tint = persona?.color ?? info.color
-      const doneN = a.tasks.filter(x => x.status === 'completed').length
       const ratio = a.status === 'failed' ? (ratioOf(a.tasks) ?? estimate(a.steps + a.tools)) : agentRatio(a)
-      const progress = a.tasks.length
-        ? `${doneN}/${a.tasks.length}`
-        : a.status === 'running'
-          ? L.actions(a.tools)
-          : a.status === 'done'
-            ? L.ready
-            : L.failed
-      const phase = a.status === 'running' ? (a.tasks.find(x => x.status === 'in_progress')?.activeForm ?? a.phase ?? L.starting) : ''
-      const ctxPct = Math.round((a.ctxTokens / windowOf(a.model)) * 100)
-      const took = fmtTime((a.endedAt ?? clock) - a.startedAt)
-      const stats = a.role === 'codex' && a.steps === 0
-        ? took
-        : `ctx ${ctxPct}%  ${fmtTokens(a.tokens)} ${fmtCost(a.costUsd)} ${took}`
-      const mark = a.status === 'running' ? '●' : a.status === 'done' ? '✓' : '✗'
+      const { progress, phase, stats, mark, sub } = facts(a, clock)
       const markColor = a.status === 'running' ? CLAY : a.status === 'done' ? '#3FB27F' : '#E24B4A'
-      const sub = `${a.role === 'codex' ? 'Codex' : shortModel(a.model)}${effortLabel(a.effort)}`
       // a finished agent's row goes still and grey: no sweeping glint, the role colour faded
       const done = a.status !== 'running'
       const barColor = done ? fade(tint) : tint
