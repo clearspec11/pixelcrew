@@ -282,6 +282,20 @@ test('/crew-bar turns the band off and on', EN, async ($, on) => {
   expect((await run('on')).text).toBe('Progress band on')
 })
 
+test('/crew says why the pane is not drawn instead of claiming it opened', EN, async ($, on) => {
+  ;(on as any)('ui.open', () => ({ value: { isPlaced: false, reason: 'no-surface' } }))
+  on('session.surfaces', () => ({ value: [] }))
+  const out = await ($.command.run as any)({ command: 'crew', args: '' })
+  expect(out.text).toMatch(/not drawn here \(no-surface\)/)
+  expect(out.text).toMatch(/attached surfaces: none/)
+})
+
+test('/crew reports the pane opened when a surface places it', EN, async ($, on) => {
+  ;(on as any)('ui.open', () => ({ value: { isPlaced: true } }))
+  const out = await ($.command.run as any)({ command: 'crew', args: '' })
+  expect(out.text).toBe('Agents panel opened.')
+})
+
 // ── Terminal pixel art ───────────────────────────────────────────────────
 // A Raster's cells are base64 of little-endian u32 triplets [codePoint, fg, bg];
 // this decoder reads them back so a test can look at single cells.

@@ -543,8 +543,10 @@ export const register: Register = (on, options) => {
   })
 
   on('command.run', { command: 'crew' }, async $ => {
-    await $.ui.open({ id: PANE, title: 'Agents' })
-    return { text: L.paneOpened }
+    const opened = await $.ui.open({ id: PANE, title: 'Agents' })
+    if (opened.isPlaced) return { text: L.paneOpened }
+    const surfaces = await $.session.surfaces()
+    return { text: L.paneWaiting(String(opened.reason), surfaces.join(', ')) }
   })
 
   // /crew-bar alterna; /crew-bar on|off (ou ligar/desligar, activar/desactivar) escolhe

@@ -23,6 +23,7 @@ export type Strings = {
   starting: string
   codexTask: string
   paneOpened: string
+  paneWaiting: (reason: string, surfaces: string) => string
   cleared: string
   cmdCrew: string
   cmdClear: string
@@ -71,6 +72,7 @@ const en: Strings = {
   starting: 'Starting',
   codexTask: 'Task delegated to Codex',
   paneOpened: 'Agents panel opened.',
+  paneWaiting: (reason, surfaces) => `Agents panel not drawn here (${reason}); attached surfaces: ${surfaces || 'none'}. It opens when a surface that places panes is attached.`,
   cleared: 'pixel-crew cleared.',
   cmdCrew: 'Open the subagents panel (pixel-crew)',
   cmdClear: 'Clear pixel-crew tasks and agents',
@@ -127,6 +129,7 @@ const pt: Strings = {
   starting: 'Começando',
   codexTask: 'Tarefa delegada ao Codex',
   paneOpened: 'Painel dos agents aberto.',
+  paneWaiting: (reason, surfaces) => `Painel dos agents não desenhado aqui (${reason}); superfícies ligadas: ${surfaces || 'nenhuma'}. Abre quando uma superfície que coloca painéis estiver ligada.`,
   cleared: 'pixel-crew limpo.',
   cmdCrew: 'Abre o painel dos subagents (pixel-crew)',
   cmdClear: 'Limpa as tarefas e os agents do pixel-crew',
@@ -183,6 +186,7 @@ const es: Strings = {
   starting: 'Empezando',
   codexTask: 'Tarea delegada a Codex',
   paneOpened: 'Panel de agentes abierto.',
+  paneWaiting: (reason, surfaces) => `Panel de agentes no dibujado aquí (${reason}); superficies conectadas: ${surfaces || 'ninguna'}. Se abre cuando haya una superficie que coloque paneles.`,
   cleared: 'pixel-crew limpio.',
   cmdCrew: 'Abre el panel de subagentes (pixel-crew)',
   cmdClear: 'Limpia las tareas y los agentes de pixel-crew',
