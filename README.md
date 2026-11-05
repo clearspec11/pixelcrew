@@ -20,14 +20,14 @@ It reads the `council` plugin's band state when that plugin is installed (homela
 
 ## What it does
 
-**A progress band above the prompt.** While Claude works, the band shows what it is doing right now ("Editing register.tsx", "Running the tests"), a pixel progress bar with a light sweeping across it, and the percentage. The mascot walks along the bar, right at the edge of what is done, and the bar glides to each new value instead of jumping. When Claude delegates to subagents it becomes the **boss**: it grows, puts on a crown and cape, the bar turns purple, and a counter shows how many subagents are done (`1/3`).
+**A progress band above the prompt.** While Claude works, the band shows what it is doing right now ("Editing register.tsx", "Running the tests"), a pixel progress bar with a light sweeping across it, and the percentage. The mascot walks along the bar, right at the edge of what is done, and the bar glides to each new value instead of jumping. When Claude delegates to subagents it becomes the **boss**: it puts on a crown and cape (at the same size, so the band never changes height), the bar turns purple, and a counter shows how many subagents are done (`1/3`).
 
 ![The progress band](docs/band.png)
 
 **Moods.** The mascot reacts to what happens in the session:
 
 - **Done:** when a turn finishes well, it jumps among confetti at 100% for a couple of seconds.
-- **Waiting for you:** when Claude asks a question or needs your permission, it raises a hand with a `!`.
+- **Waiting for you:** when Claude asks a question or needs your permission, it raises a hand with a `!`, the bar and the title turn amber, and the percentage steps aside.
 - **Something failed:** when one of Claude's tools fails, it shakes and the bar turns red for a moment.
 - **Asleep:** when nothing is running but the task list still has work, it dozes off.
 

@@ -3,6 +3,8 @@ import type { PcRole } from '../types'
 // Paleta "Argila Claude" da barra principal
 export const CLAY = '#D97757'
 export const CLAY_LIGHT = '#E8957A'
+// o âmbar do "!" do mascote: a barra e o título quando o Claude espera você
+export const ALERT = '#F5C542'
 
 export type RoleInfo = { label: string; color: string; light: string }
 
@@ -37,7 +39,7 @@ export const ROLE_SYMBOL: Record<PcRole, string> = {
 const PAL: Record<string, string> = {
   X: CLAY, E: "#1F1410",
   Y: "#F2C230", y: "#C99A1E", J: "#F08A24", L: "#FFF6C8",
-  Q: "#F5C542", q: "#B8861A", R: "#E24B4A", I: "#534AB7",
+  Q: ALERT, q: "#B8861A", R: "#E24B4A", I: "#534AB7",
   W: "#F4F4F4", K: "#2A2E36", k: "#4A505C", G: "#C9CCD1", g: "#9A9EA6",
   P: "#D93A3A", p: "#A32626", C: "#3B8FE0", H: "#8A5A2B",
   F: "#9A6A3A", f: "#7A4F28", M: "#FFE9A8",
@@ -369,8 +371,14 @@ export type BarOpts = {
 }
 
 const COLS = 60
-const ROWS = 3
+const ROWS = 2
+// the terminal's empty track: a cell can't blend, so it gets a fixed dark tone
 const TRACK = "#2A2725"
+// the desktop track is the bar's own colour, see-through, so it reads on dark
+// and light cards alike and turns red or purple with the fill; a finished
+// (faded, still) bar keeps a touch more so its track does not vanish
+const TRACK_ALPHA = 0.33
+const TRACK_ALPHA_STILL = 0.35
 
 function mix(hex: string, to: string, t: number): string {
   const a = parseInt(hex.slice(1), 16)
@@ -385,11 +393,13 @@ export function fade(color: string): string {
 }
 
 /**
- * Barra de carregamento "brilho que passa": preenchimento sólido com uma linha
- * de brilho em cima e um reflexo diagonal de pixels que varre a parte cheia a
- * cada quadro; o trilho vazio é liso. `ratio` null é uma barra indeterminada
- * (um bloco que vai e volta). Desenhada larga e sem proporção fixa, ela estica
- * até a largura do espaço, na altura que o elemento pedir.
+ * Barra de carregamento "brilho que passa", em duas linhas de pixels como a do
+ * terminal: a de cima é o brilho, a de baixo o preenchimento, e um reflexo
+ * diagonal de dois pixels varre a parte cheia a cada quadro. O trilho vazio é
+ * a própria cor da barra, translúcida, para aparecer no tema claro e no
+ * escuro. `ratio` null é uma barra indeterminada (um bloco que vai e volta).
+ * Desenhada larga e sem proporção fixa, ela estica até a largura do espaço,
+ * na altura que o elemento pedir.
  */
 export function barSvg({ ratio, color, frame = 0, still = false }: BarOpts): string {
   const hi = mix(color, "#FFFFFF", 0.45)
@@ -409,7 +419,7 @@ export function barSvg({ ratio, color, frame = 0, still = false }: BarOpts): str
     to = Math.round(COLS * Math.max(0, Math.min(1, ratio)))
   }
 
-  let body = rect(0, 0, COLS, ROWS, TRACK)
+  let body = `<rect x="0" y="0" width="${COLS}" height="${ROWS}" fill="${color}" fill-opacity="${still ? TRACK_ALPHA_STILL : TRACK_ALPHA}"/>`
   if (to > from) {
     body += rect(from, 0, to - from, ROWS, color) + rect(from, 0, to - from, 1, hi)
     if (!still) {
@@ -423,7 +433,7 @@ export function barSvg({ ratio, color, frame = 0, still = false }: BarOpts): str
       }
     }
   }
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="2000" height="${ROWS * 4}" viewBox="0 0 ${COLS} ${ROWS}" preserveAspectRatio="none" shape-rendering="crispEdges">${body}</svg>`
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="2000" height="${ROWS * 3}" viewBox="0 0 ${COLS} ${ROWS}" preserveAspectRatio="none" shape-rendering="crispEdges">${body}</svg>`
 }
 
 // ── Terminal: pixel art in a Raster ─────────────────────────────────────

@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { PcAgent, PcFx, PcMain, PcRole, PcTask } from '../types'
-import { bandRaster, barRaster, barSvg, CLAY, fade, mascotSvg, MAX_RASTER_COLUMNS, ROLE_SYMBOL, ROLES, spriteRaster, spriteSvg } from './art'
+import { ALERT, bandRaster, barRaster, barSvg, CLAY, fade, mascotSvg, MAX_RASTER_COLUMNS, ROLE_SYMBOL, ROLES, spriteRaster, spriteSvg } from './art'
 
 // terminal art budgets: the fewest columns worth drawing a band, a panel bar or
 // the text beside a sprite, and the title room the band keeps before its art
@@ -756,8 +756,14 @@ export const register: Register = (on, options) => {
     const f = await read($, frame)
     const ratio = glide(view.target, t)
     const pct = `${Math.round(ratio * 100)}%`
+    // esperando você (permissão ou pergunta): barra e título em âmbar, e sem
+    // porcentagem, que agora não importa (como na linha de status)
+    const alerting = pose === 'alert'
+    // o texto usa o âmbar do tema ('warning'), não o hex da barra: #F5C542 em
+    // texto some no tema claro (1,6:1 no branco), e a chave segue o tema de quem lê
+    const alertInk = 'warning'
 
-    const color = shaking ? ERROR : delegating ? ROLES.boss.color : CLAY
+    const color = shaking ? ERROR : alerting ? ALERT : delegating ? ROLES.boss.color : CLAY
     const els: any = $.ui.resolve(e)
     const { Box, Text, Button } = els
     const openPane = () => $.ui.open({ id: PANE, title: 'Agents' }).catch(() => {})
@@ -774,9 +780,13 @@ export const register: Register = (on, options) => {
       // com sua coluna de espaço; o que não cabe sai, e sem lugar nem para a
       // porcentagem a faixa dá a vez a quem está por baixo
       const width = Math.max(0, e.props.bodyColumns)
-      if (width < pct.length) return next(e)
+      // esperando você, o título faz o papel da porcentagem: guarda a primeira
+      // coluna antes da contagem e da equipe, para o aviso nunca sumir
+      const pctShown = alerting ? '' : pct
+      const reserved = pctShown.length || 1
+      if (width < reserved) return next(e)
       const crewLabel = `×${view.crew}`
-      let budget = width - pct.length
+      let budget = width - reserved
       const showCount = count !== '' && budget >= count.length + 1
       if (showCount) budget -= count.length + 1
       const showCrew = view.crew > 0 && budget >= crewLabel.length + 1
@@ -786,12 +796,13 @@ export const register: Register = (on, options) => {
       const mood = { walk: '', jump: '✦', sleep: 'zz', alert: '!', shake: '✗' }[pose]
       const who = delegating ? 'boss' : view.role
       const icon = [who ? ROLE_SYMBOL[who] : '', mood].filter(Boolean).join(' ')
-      const iconColor = shaking || !who ? color : ROLES[who].color
+      const iconColor = shaking ? color : alerting ? alertInk : !who ? color : ROLES[who].color
       const showIcon = icon !== '' && budget >= icon.length + 1 + 1 + TITLE_MIN
       if (showIcon) budget -= icon.length + 1
-      // o título (e a arte ao lado dele) ocupa o resto, menos a coluna antes da porcentagem
-      const showTitle = budget >= 1
-      const room = budget - 1
+      // o título (e a arte ao lado dele) ocupa o resto, menos a coluna antes da
+      // porcentagem; sem porcentagem, essa coluna também é dele
+      const showTitle = alerting || budget >= 1
+      const room = pctShown ? budget - 1 : budget + reserved
       const columns = Math.min(60, Math.floor(room * 0.6), room - 1 - TITLE_MIN)
       const art = columns < BAND_MIN ? null : bandRaster({
         key: 'band',
@@ -806,7 +817,7 @@ export const register: Register = (on, options) => {
         <Box flexDirection="row" gap={1}>
           {showTitle && (
             <Box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
-              <Text bold wrap="truncate">{title}</Text>
+              <Text bold wrap="truncate" color={alerting ? alertInk : undefined}>{title}</Text>
             </Box>
           )}
           {showIcon && <Text color={iconColor}>{icon}</Text>}
@@ -815,7 +826,7 @@ export const register: Register = (on, options) => {
               <Raster {...art} />
             </Box>
           )}
-          <Text bold>{pct}</Text>
+          {pctShown && <Text bold>{pctShown}</Text>}
           {showCount && <Text dimColor>{count}</Text>}
           {showCrew && <Button key="crew" plain label={crewLabel} onPress={openPane} />}
         </Box>
@@ -825,13 +836,14 @@ export const register: Register = (on, options) => {
     const { Svg } = els
     // o mascote anda em cima da barra, na ponta do que já está pronto: dois
     // espaçadores dividem a sobra na proporção do progresso. Enquanto delega
-    // ele é o boss, de coroa e capa.
+    // ele é o boss, de coroa e capa. O boss usa o mesmo px do Clawd: a faixa
+    // não pode mudar de altura quando ele delega (o terminal também não muda).
     const confetti = celebration === 'full'
-    const sprite = delegating ? mascotSvg('boss', pose, f, 3, confetti) : mascotSvg('clawd', pose, f, 2, confetti)
+    const sprite = mascotSvg(delegating ? 'boss' : 'clawd', pose, f, 2, confetti)
     return (
       <Box flexDirection="row" alignItems="center" gap={1} paddingX={1}>
         <Box width="30%" flexShrink={0} overflow="hidden">
-          <Text bold wrap="truncate">{title}</Text>
+          <Text bold wrap="truncate" color={alerting ? alertInk : undefined}>{title}</Text>
         </Box>
         <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
           <Box flexDirection="row" alignItems="flex-end">
@@ -847,11 +859,11 @@ export const register: Register = (on, options) => {
             <Box flexGrow={1 - ratio} flexShrink={1} />
           </Box>
           <Box overflow="hidden" justifyContent="center">
-            <Svg source={barSvg({ ratio, color, frame: f })} alt={L.altProgress(pct)} height={12} />
+            <Svg source={barSvg({ ratio, color, frame: f })} alt={L.altProgress(pct)} height={6} />
           </Box>
         </Box>
         <Box flexShrink={0} flexDirection="row" gap={1} alignItems="center">
-          <Text bold>{pct}</Text>
+          {!alerting && <Text bold>{pct}</Text>}
           {count !== '' && <Text dimColor>{count}</Text>}
           {view.crew > 0 && <Button key="crew" plain label={`×${view.crew}`} onPress={openPane} />}
         </Box>

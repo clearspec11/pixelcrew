@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { bandRaster, barRaster, fade, LINE_ART, spriteRaster } from '../hooks/art'
+import { bandRaster, barRaster, barSvg, CLAY, fade, LINE_ART, mascotSvg, spriteRaster } from '../hooks/art'
 import { langOf, strings } from '../hooks/i18n'
 import { activityOf, councilTitle, estimate, glide, priceOf, resetGlide, roleOf, statusLine, windowOf } from '../hooks/register'
 import { parseCouncil, PERSONAS } from '../hooks/council'
@@ -164,6 +164,41 @@ test('Claude becomes the boss and counts finished subagents', EN, async ($, on) 
   }
 })
 
+test('the desktop band keeps its height when Claude becomes the boss', EN, async ($, on) => {
+  const mascot = async (props: any) => {
+    const ui = await $.ui.mount({ plugin: 'pixel-crew', surface: 'desktop', component: 'AbovePrompt', props })
+    const svg = (await ui.findAll({ type: 'Svg' })).find(s => /^Claude (mascot|as the boss)$/.test(String(s.props.alt)))
+    await ui.unmount()
+    expect(svg).toBeDefined()
+    return { alt: svg!.props.alt, width: svg!.props.width, height: svg!.props.height }
+  }
+  // the hooks go in before the first mount, so this is boss() split around it
+  let n = 0
+  on('agent.spawn', async () => ({ model: 'claude-haiku-5-5', agentId: 'ag-' + ++n }))
+  on('turn.complete', async () => ({ text: '' }))
+  const clawd = await mascot(BAND)
+  expect(clawd).toEqual({ alt: 'Claude mascot', width: 36, height: 32 })
+  await $.agent.spawn({ prompt: 'a', description: 'Build the page', subagentType: 'general-purpose' } as any)
+  await $.agent.spawn({ prompt: 'b', description: 'Design the logo', subagentType: 'general-purpose' } as any)
+  await $.turn.complete({ agentId: 'ag-1', answer: 'ok', durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer' } as any)
+  const chief = await mascot({ ...BAND, isWorking: false })
+  expect(chief).toEqual({ alt: 'Claude as the boss', width: 36, height: 32 })
+  expect(chief.height).toBe(clawd.height)
+})
+
+// the band's height is the mascot's: no role, mood, frame or confetti may change it
+test('the mascot keeps one size in every role, mood and frame', () => {
+  const sizes = new Set<string>()
+  for (const role of ['clawd', 'boss'] as const)
+    for (const pose of ['walk', 'jump', 'sleep', 'alert', 'shake'] as const)
+      for (const confetti of [false, true])
+        for (let f = 0; f < 40; f++) {
+          const s = mascotSvg(role, pose, f, 2, confetti)
+          sizes.add(`${s.width}x${s.height}`)
+        }
+  expect([...sizes]).toEqual(['36x32'])
+})
+
 test('the band speaks Portuguese', PT, async ($, on) => {
   await boss($, on)
   const ui = await $.ui.mount({ plugin: 'pixel-crew', surface: 'desktop', component: 'AbovePrompt', props: { ...BAND, isWorking: false } })
@@ -245,10 +280,123 @@ test('Claude raises a hand while a question waits for you', EN, async ($, on) =>
 
 test('a permission prompt shows on the band', PT, async ($, on) => {
   ;(on as any)('tool.check', async () => ({ decision: 'ask' }))
-  await ($.tool.check as any)({ tool: 'Bash', input: { command: 'rm -rf build' }, tool_use_id: 'tu-1' })
-  const ui = await $.ui.mount({ plugin: 'pixel-crew', surface: 'desktop', component: 'AbovePrompt', props: BAND })
-  expect(await ui.find({ text: /Esperando sua permissão/ })).toBeDefined()
+  // beneath pixel-crew, a stand-in for the tool: nothing really runs
+  ;(on as any)('tool.call', { tool: 'Bash' }, async () => ({ result: 'ok', text: 'ok' }))
+  const input = { command: 'ls build' }
+  await ($.tool.check as any)({ tool: 'Bash', input, tool_use_id: 'tu-1' })
+  const mount = () => $.ui.mount({ plugin: 'pixel-crew', surface: 'desktop', component: 'AbovePrompt', props: BAND })
+  const barOf = async (ui: any) => String((await ui.findAll({ type: 'Svg' })).find((s: any) => /progress/i.test(String(s.props.alt)))!.props.source)
+  // waiting for you: the bar and the title turn amber, the % steps aside
+  let ui = await mount()
+  const title = await ui.find({ type: 'Text', text: /Esperando sua permissão/ })
+  expect(title).toBeDefined()
+  expect(title!.props.color).toBe('warning')
+  expect(await barOf(ui)).toContain('#F5C542')
+  expect(await ui.find({ type: 'Text', text: /%/ })).toBeUndefined()
   await ui.unmount()
+
+  // allowed and run: the amber goes and the % is back
+  await ($.tool.call as any)({ tool: 'Bash', input, tool_use_id: 'tu-1' })
+  ui = await mount()
+  expect(await ui.find({ text: /Esperando sua permissão/ })).toBeUndefined()
+  expect(await barOf(ui)).not.toContain('#F5C542')
+  expect(await ui.find({ type: 'Text', text: /^\d+%$/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the terminal band says it needs you in amber, without the %', EN, async ($, on) => {
+  // half the list done, so the bar has a fill to colour
+  resetGlide()
+  ;(on as any)('tool.call', { tool: 'TodoWrite' }, async () => ({ result: { oldTodos: [], newTodos: [] } }))
+  // only the Bash command asks; the list goes through as usual
+  ;(on as any)('tool.check', async (_: any, e: any, next: any) => (e.tool === 'Bash' ? { decision: 'ask' } : next(e)))
+  await ($.tool.call as any)({
+    tool: 'TodoWrite',
+    input: {
+      todos: [
+        { content: 'First', status: 'completed', activeForm: 'Doing the first' },
+        { content: 'Second', status: 'in_progress', activeForm: 'Doing the second' },
+      ],
+    },
+  } as any)
+  await ($.tool.check as any)({ tool: 'Bash', input: { command: 'ls build' }, tool_use_id: 'tu-1' })
+  const mount = (bodyColumns: number) =>
+    $.ui.mount({ plugin: 'pixel-crew', surface: 'terminal', component: 'AbovePrompt', props: { ...BAND, bodyColumns } })
+  let ui = await mount(40)
+  const title = await ui.find({ type: 'Text', text: /Waiting for your permission/ })
+  expect(title).toBeDefined()
+  expect(title!.props.color).toBe('warning')
+  // the "!" matches the title: the theme's amber, readable on a light terminal too
+  expect((await ui.find({ type: 'Text', text: /!/ }))?.props.color).toBe('warning')
+  expect(await ui.find({ type: 'Text', text: /%/ })).toBeUndefined()
+  // the count stays: it still says how far the list is
+  expect(await ui.find({ text: /^1\/2$/ })).toBeDefined()
+  const raster = await ui.find({ type: 'Raster' })
+  expect(raster).toBeDefined()
+  const colors = new Set(decodeCells(String(raster!.props.cells)).flatMap(([, fg, bg]) => [fg, bg]))
+  expect(colors.has(0xf5c542)).toBe(true)
+  await ui.unmount()
+  // with no % the row still fits: each thing after the title costs its width and a gap
+  for (const bodyColumns of [2, 8, 16, 30, 100]) {
+    ui = await mount(bodyColumns)
+    const rasters = await ui.findAll({ type: 'Raster' })
+    const extras = [
+      ...(await ui.findAll({ text: /^\d+\/\d+$/ })).map(t => String(t.text).length),
+      ...(await ui.findAll({ type: 'Button' })).map(b => String(b.props.label).length),
+      ...rasters.map(r => Number(r.props.columns)),
+      ...(await ui.findAll({ type: 'Text', text: /!$/ })).map(t => String(t.text).length),
+    ]
+    const used = extras.reduce((a, w) => a + w + 1, 0)
+    expect(used).toBeLessThanOrEqual(bodyColumns)
+    if (rasters.length) expect(bodyColumns - used).toBeGreaterThanOrEqual(8)
+    expect(await ui.find({ type: 'Text', text: /%/ })).toBeUndefined()
+    await ui.unmount()
+  }
+  // the freed % column keeps the band up where a % alone would not fit
+  ui = await mount(1)
+  expect(await ui.find({ type: 'Text', text: /%/ })).toBeUndefined()
+  expect(await ui.find({ text: /Waiting for your permission/ })).toBeDefined()
+  await ui.unmount()
+})
+
+// at every width the waiting title outranks the count and the crew button: a
+// narrow band that showed only "1/2" would hide that Claude needs you
+async function alertAtEveryWidth($: any, on: any, setup: (on: any) => Promise<void>) {
+  ;(on as any)('tool.check', async (_: any, e: any, next: any) => (e.tool === 'Bash' ? { decision: 'ask' } : next(e)))
+  await setup(on)
+  await ($.tool.check as any)({ tool: 'Bash', input: { command: 'ls build' }, tool_use_id: 'tu-1' })
+  for (let bodyColumns = 1; bodyColumns <= 20; bodyColumns++) {
+    const ui = await $.ui.mount({ plugin: 'pixel-crew', surface: 'terminal', component: 'AbovePrompt', props: { ...BAND, isWorking: false, bodyColumns } })
+    const title = await ui.find({ type: 'Text', text: /Waiting for your permission/ })
+    if (!title) throw new Error(`no waiting title at ${bodyColumns} columns`)
+    expect(await ui.find({ type: 'Text', text: /%/ })).toBeUndefined()
+    await ui.unmount()
+  }
+}
+
+test('the waiting title never gives way to the count', EN, async ($, on) => {
+  resetGlide()
+  await alertAtEveryWidth($, on, async on => {
+    on('tool.call', { tool: 'TodoWrite' }, async () => ({ result: { oldTodos: [], newTodos: [] } }))
+    await ($.tool.call as any)({
+      tool: 'TodoWrite',
+      input: { todos: [{ content: 'First', status: 'completed', activeForm: 'Doing the first' }, { content: 'Second', status: 'in_progress', activeForm: 'Doing the second' }] },
+    } as any)
+  })
+})
+
+test('the waiting title never gives way to the crew button', EN, async ($, on) => {
+  await alertAtEveryWidth($, on, async on => {
+    let n = 0
+    on('agent.spawn', async () => ({ model: 'claude-haiku-5-5', agentId: 'ag-' + ++n }))
+    on('turn.complete', async () => ({ text: '' }))
+    await $.agent.spawn({ prompt: 'a', description: 'Build the page', subagentType: 'general-purpose' } as any)
+    await $.turn.complete({ agentId: 'ag-1', answer: 'ok', durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer' } as any)
+  })
+})
+
+test('the waiting title never gives way to the count and crew together', EN, async ($, on) => {
+  await alertAtEveryWidth($, on, async on => boss($, on))
 })
 
 test('a failed tool turns the bar red for a moment', EN, async ($, on) => {
@@ -845,4 +993,97 @@ test('the status line says what the band says', async () => {
   expect(statusLine({ ...base, title: 'Waiting for 2 agents', pose: 'walk', delegating: true, count: '1/3' } as any)).toBe('♛ Waiting for 2 agents · 45% · 1/3')
   expect(statusLine({ ...base, title: 'Waiting for your permission', pose: 'alert' } as any)).toBe('! Waiting for your permission')
   expect(statusLine({ ...base, title: 'Done', pose: 'jump', target: 1 } as any)).toBe('✦ Done · 100%')
+})
+
+// ── The slim desktop bar ─────────────────────────────────────────────────
+// The desktop bar is two pixel rows (highlight over fill) like the terminal's,
+// and its empty track is the bar's own colour, see-through, not a fixed dark tone.
+
+const trackOf = (src: string) => {
+  const m = /<rect x="0" y="0" width="60" height="2" fill="(#[0-9A-Fa-f]{6})" fill-opacity="([\d.]+)"\/>/.exec(src)
+  expect(m).not.toBeNull()
+  return { fill: m![1]!, alpha: Number(m![2]) }
+}
+const lum = (rgb: number[]) => {
+  const [r, g, b] = rgb.map(v => (v /= 255) <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)
+  return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!
+}
+const rgbOf = (hex: string) => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16))
+const contrast = (a: number[], b: number[]) => {
+  const [x, y] = [lum(a), lum(b)]
+  return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05)
+}
+/** the track as the eye sees it: its colour at its opacity over the card */
+const trackContrast = (src: string, card: string) => {
+  const { fill, alpha } = trackOf(src)
+  const bg = rgbOf(card)
+  const seen = rgbOf(fill).map((v, i) => v * alpha + bg[i]! * (1 - alpha))
+  return contrast(seen, bg)
+}
+
+test('the desktop band bar is 6pt tall with no fixed dark track', EN, async ($, on) => {
+  const ui = await $.ui.mount({ plugin: 'pixel-crew', surface: 'desktop', component: 'AbovePrompt', props: BAND })
+  const bar = (await ui.findAll({ type: 'Svg' })).find(s => /progress/i.test(String(s.props.alt)))
+  expect(bar).toBeDefined()
+  expect(bar!.props.height).toBe(6)
+  expect(String(bar!.props.source)).not.toMatch(/#2A2725/i)
+  await ui.unmount()
+})
+
+test('the desktop bar is two pixel rows with a see-through track in the bar colour', async () => {
+  const src = barSvg({ ratio: 0, color: CLAY })
+  expect(src).not.toMatch(/#2A2725/i)
+  expect(/viewBox="([^"]+)"/.exec(src)![1]).toBe('0 0 60 2')
+  const t = trackOf(src)
+  expect(t.fill).toBe(CLAY)
+  expect(t.alpha).toBeGreaterThanOrEqual(0.15)
+  expect(t.alpha).toBeLessThanOrEqual(0.35)
+  // the error red tints its own track
+  expect(trackOf(barSvg({ ratio: 0.4, color: '#E24B4A' })).fill).toBe('#E24B4A')
+  // a finished (still) bar keeps at least as much track
+  const done = trackOf(barSvg({ ratio: 1, color: fade('#639922'), still: true }))
+  expect(done.fill).toBe(fade('#639922'))
+  expect(done.alpha).toBeGreaterThanOrEqual(t.alpha)
+  expect(done.alpha).toBeLessThanOrEqual(0.35)
+})
+
+test('an empty desktop bar still shows its track on dark and light cards, without a heavy slab', async () => {
+  const src = barSvg({ ratio: 0, color: CLAY })
+  for (const card of ['#262624', '#252525', '#FFFFFF']) expect(trackContrast(src, card)).toBeGreaterThanOrEqual(1.4)
+  expect(trackContrast(src, '#FFFFFF')).toBeLessThan(3)
+  // a finished pane bar, greyed, keeps a visible track on the dark card
+  expect(trackContrast(barSvg({ ratio: 0, color: fade('#639922'), still: true }), '#252525')).toBeGreaterThanOrEqual(1.4)
+})
+
+test('the indeterminate desktop bar moves and stays inside its 60 columns', async () => {
+  const a = barSvg({ ratio: null, color: CLAY, frame: 0 })
+  const b = barSvg({ ratio: null, color: CLAY, frame: 30 })
+  expect(a).not.toBe(b)
+  for (const src of [a, b])
+    for (const m of src.matchAll(/<rect x="(-?\d+)" y="(\d+)" width="(\d+)" height="(\d+)"/g)) {
+      expect(Number(m[1])).toBeGreaterThanOrEqual(0)
+      expect(Number(m[1]) + Number(m[3])).toBeLessThanOrEqual(60)
+      expect(Number(m[2]) + Number(m[4])).toBeLessThanOrEqual(2)
+    }
+})
+
+test('the desktop and terminal bars draw the same pixels', async () => {
+  // paint the svg's rects onto a 60x2 grid; the track rect (with opacity) stays empty
+  const paint = (src: string) => {
+    const grid: Array<Array<number | undefined>> = [Array(60).fill(undefined), Array(60).fill(undefined)]
+    for (const m of src.matchAll(/<rect x="(\d+)" y="(\d+)" width="(\d+)" height="(\d+)" fill="#([0-9a-fA-F]{6})"(\s+fill-opacity)?/g)) {
+      if (m[6]) continue
+      for (let y = +m[2]!; y < +m[2]! + +m[4]!; y++) for (let x = +m[1]!; x < +m[1]! + +m[3]!; x++) grid[y]![x] = parseInt(m[5]!, 16)
+    }
+    return grid
+  }
+  const TRACK = 0x2a2725
+  for (const [ratio, frame] of [[0.5, 0], [0.5, 7], [1, 13], [0.25, 3], [null, 0], [null, 30]] as const) {
+    const svg = paint(barSvg({ ratio, color: CLAY, frame }))
+    const cells = decodeCells(barRaster({ key: 'b', columns: 60, ratio, color: CLAY, frame }).cells)
+    cells.forEach(([, fg, bg], x) => {
+      expect(svg[0]![x]).toBe(fg === TRACK ? undefined : fg)
+      expect(svg[1]![x]).toBe(bg === TRACK ? undefined : bg)
+    })
+  }
 })
