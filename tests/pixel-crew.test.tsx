@@ -1,8 +1,8 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
 import { bandRaster, barRaster, fade, LINE_ART, spriteRaster } from '../hooks/art'
 import { langOf, strings } from '../hooks/i18n'
-import { activityOf, councilTitle, estimate, glide, priceOf, resetGlide, roleOf, windowOf } from '../hooks/register'
+import { activityOf, councilTitle, estimate, glide, priceOf, resetGlide, roleOf, statusLine, windowOf } from '../hooks/register'
 import { parseCouncil, PERSONAS } from '../hooks/council'
 
 const BAND: any = {
@@ -773,4 +773,58 @@ test('celebration off skips the done moment', { options: { language: 'en', celeb
   const ui = await $.ui.mount({ plugin: 'pixel-crew', surface: 'desktop', component: 'AbovePrompt', props: { ...BAND, isWorking: false } })
   expect(await ui.find({ text: /^Done$/ })).toBeUndefined()
   await ui.unmount()
+})
+
+// ── the status line, for the mobile app (it draws no band) ──────────────
+
+async function session($: any, on: any, surfaces: string[]) {
+  const clock = mock.clock(on, { now: 1_000 })
+  mock.store(on, {})
+  const lines: Array<string | undefined> = []
+  on('ui.status', (_$: any, e: any) => {
+    lines.push(e.text)
+    return { value: undefined }
+  })
+  on('session.surfaces', () => ({ value: surfaces }))
+  on('command.register', () => ({ value: { command: 'crew' } }))
+  on('session.start', (_$: any, e: any) => ({ cwd: e.cwd }))
+  ;(on as any)('tool.call', { tool: 'TodoWrite' }, async () => ({ result: { oldTodos: [], newTodos: [] } }))
+  await $.session.start({ source: 'startup', cwd: '/x', surface: surfaces[0], isInteractive: true } as any)
+  await ($.tool.call as any)({
+    tool: 'TodoWrite',
+    input: {
+      todos: [
+        { content: 'First', status: 'completed', activeForm: 'Doing the first' },
+        { content: 'Second', status: 'in_progress', activeForm: 'Doing the second' },
+      ],
+    },
+  })
+  await clock.advance(1_000)
+  return { clock, lines }
+}
+
+test('the phone gets the band as a status line', EN, async ($, on) => {
+  const { lines } = await session($, on, ['mobile'])
+  expect(lines.at(-1)).toBe('⚒ Doing the second · 50% · 1/2')
+})
+
+test('no status line without the phone: the band says it', EN, async ($, on) => {
+  const { lines } = await session($, on, ['terminal'])
+  expect(lines.filter(l => l !== undefined)).toEqual([])
+})
+
+test('/crew-bar off clears the status line too', EN, async ($, on) => {
+  const { clock, lines } = await session($, on, ['mobile', 'desktop'])
+  expect(lines.at(-1)).toContain('Doing the second')
+  await $.command.run({ command: 'crew-bar', args: 'off' } as any)
+  await clock.advance(1_000)
+  expect(lines.at(-1)).toBeUndefined()
+})
+
+test('the status line says what the band says', async () => {
+  const base = { target: 0.43, count: '', delegating: false, shaking: false, crew: 0 }
+  expect(statusLine({ ...base, title: 'Editing art.ts', pose: 'walk', role: 'developer' } as any)).toBe('⌨ Editing art.ts · 45%')
+  expect(statusLine({ ...base, title: 'Waiting for 2 agents', pose: 'walk', delegating: true, count: '1/3' } as any)).toBe('♛ Waiting for 2 agents · 45% · 1/3')
+  expect(statusLine({ ...base, title: 'Waiting for your permission', pose: 'alert' } as any)).toBe('! Waiting for your permission')
+  expect(statusLine({ ...base, title: 'Done', pose: 'jump', target: 1 } as any)).toBe('✦ Done · 100%')
 })

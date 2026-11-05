@@ -324,6 +324,122 @@ async function addAgent($: EngineInterface, agent: PcAgent) {
   }
 }
 
+type BandView = {
+  title: string
+  /** progress, 0 to 1, before the band's glide */
+  target: number
+  count: string
+  pose: Pose
+  delegating: boolean
+  shaking: boolean
+  /** the role of what the main agent did last, for its symbol */
+  role?: Exclude<PcRole, 'boss'>
+  /** agents in the panel, running or finished */
+  crew: number
+}
+
+/**
+ * What the band shows right now, or null when it has nothing to show. The
+ * band draws it; the status line (for the mobile app, which draws no band)
+ * says it in one line. `appWorking` is the app's own word that a turn runs.
+ */
+async function bandView($: EngineInterface, appWorking: boolean, t = Date.now()): Promise<BandView | null> {
+  const list = await read($, tasks)
+  const crew = await read($, agents)
+  const stored = await read($, main)
+  const effects = await read($, fx)
+  // o app já diz "trabalhando" mas o estado ainda é do turno que acabou: é um turno novo
+  const fresh = appWorking && !stored.working
+  const m: PcMain = fresh ? { activity: L.thinking, steps: 0, tools: 0, working: true, done: false } : stored
+  const since = await read($, batchStart)
+  const running = crew.filter(a => a.status === 'running').length
+  const isWorking = m.working || appWorking
+  const celebrating = !fresh && !isWorking && t < effects.celebrateUntil
+  const asking = effects.asking
+  if (list.length === 0 && running === 0 && !isWorking && !celebrating && !asking) return null
+
+  // o lote atual de subagents: os que começaram desde que nenhum rodava
+  const batch = crew.filter(a => a.startedAt >= since)
+  const delegating = running > 0
+  const doneTasks = list.filter(x => x.status === 'completed').length
+
+  // progresso: lista de tarefas > média dos subagents do lote > estimativa do turno
+  const target = list.length
+    ? doneTasks / list.length
+    : delegating && batch.length
+      ? batch.reduce((s, a) => s + agentRatio(a), 0) / batch.length
+      : m.done || celebrating
+        ? 1
+        : estimate(m.steps + m.tools)
+  const count = delegating
+    ? `${batch.filter(a => a.status !== 'running').length}/${batch.length}`
+    : list.length
+      ? `${doneTasks}/${list.length}`
+      : ''
+
+  // o que o mascote faz: esperar você > tremer > comemorar > andar > dormir
+  const shaking = t < effects.errorUntil
+  const pose: Pose = asking
+    ? 'alert'
+    : shaking
+      ? 'shake'
+      : celebrating
+        ? 'jump'
+        : isWorking || delegating
+          ? 'walk'
+          : 'sleep'
+
+  const active = list.find(x => x.status === 'in_progress')
+  const title = asking
+    ? asking === 'permission'
+      ? L.needsPermission
+      : L.waitingForYou
+    : celebrating
+      ? L.done
+      : isWorking
+        ? m.activity && m.activity !== L.thinking
+          ? m.activity
+          : active?.activeForm || L.thinking
+        : delegating
+          ? L.waiting(running)
+          : active?.activeForm || active?.subject || L.tasks
+
+  return { title, target, count, pose, delegating, shaking, role: m.role, crew: crew.length }
+}
+
+/** The band in one line: the mood or role symbol, what is happening, progress and count. */
+export function statusLine(v: BandView): string {
+  const mood = { walk: '', jump: '✦', sleep: 'zz', alert: '!', shake: '✗' }[v.pose]
+  const who = v.delegating ? 'boss' : v.role
+  const icon = mood || (who ? ROLE_SYMBOL[who] : '')
+  // in steps of 5%, so the phone is not sent a new line for every point
+  const pct = v.pose === 'alert' ? '' : `${Math.round(v.target * 20) * 5}%`
+  return [icon ? `${icon} ${v.title}` : v.title, pct, v.count].filter(Boolean).join(' · ')
+}
+
+const STATUS_MS = 1000
+let statusText: string | undefined
+let statusBusy = false
+
+/**
+ * Keeps the status line in step with the band while the mobile app is
+ * attached, where no band is drawn; elsewhere the band says it and the line
+ * stays clear. Off with the band (/crew-bar), and quiet during a council
+ * round, whose own status line follows the round.
+ */
+async function updateStatus($: EngineInterface) {
+  let text: string | undefined
+  const round = (await $.state.get(councilBand)).value
+  if ((await read($, bandOn)) && !(round && !round.isFinished)) {
+    const view = await bandView($, false)
+    if (view) text = statusLine(view)
+  }
+  if (text !== undefined && !(await $.session.surfaces()).includes('mobile')) text = undefined
+  if (text === statusText) return
+  statusText = text
+  $.ui.status(text)
+}
+
 export const register: Register = (on, options) => {
   // language: the option, or with "auto" (the default) the system's, refined
   // at session start by Claude Code's own "language" setting and LANG/LC_*
@@ -409,6 +525,17 @@ export const register: Register = (on, options) => {
         .catch(() => {})
         .finally(() => {
           ticking = false
+        })
+    })
+
+    // the status line for the mobile app, checked once a second
+    $.clock.every(STATUS_MS, () => {
+      if (statusBusy) return
+      statusBusy = true
+      void updateStatus($)
+        .catch(() => {})
+        .finally(() => {
+          statusBusy = false
         })
     })
 
@@ -620,71 +747,14 @@ export const register: Register = (on, options) => {
     // a council round in progress has the band: its own shows the round
     const round = (await $.state.get(councilBand)).value
     if (round && !round.isFinished && !(await $.state.get(councilBandHidden)).value) return next(e)
-    const list = await read($, tasks)
-    const crew = await read($, agents)
-    const stored = await read($, main)
-    const effects = await read($, fx)
-    // o app já diz "trabalhando" mas o estado ainda é do turno que acabou: é um turno novo
-    const fresh = e.props.isWorking && !stored.working
-    const m: PcMain = fresh ? { activity: L.thinking, steps: 0, tools: 0, working: true, done: false } : stored
-    const since = await read($, batchStart)
-    const running = crew.filter(a => a.status === 'running').length
-    const isWorking = m.working || e.props.isWorking
+    if (e.props.hasSurvey) return next(e)
     const t = Date.now()
-    const celebrating = !fresh && !isWorking && t < effects.celebrateUntil
-    const asking = effects.asking
-    if (e.props.hasSurvey || (list.length === 0 && running === 0 && !isWorking && !celebrating && !asking)) {
-      return next(e)
-    }
-
+    const view = await bandView($, e.props.isWorking, t)
+    if (!view) return next(e)
+    const { title, count, pose, delegating, shaking } = view
     const f = await read($, frame)
-    // o lote atual de subagents: os que começaram desde que nenhum rodava
-    const batch = crew.filter(a => a.startedAt >= since)
-    const delegating = running > 0
-    const doneTasks = list.filter(x => x.status === 'completed').length
-
-    // progresso: lista de tarefas > média dos subagents do lote > estimativa do turno
-    const target = list.length
-      ? doneTasks / list.length
-      : delegating && batch.length
-        ? batch.reduce((s, a) => s + agentRatio(a), 0) / batch.length
-        : m.done || celebrating
-          ? 1
-          : estimate(m.steps + m.tools)
-    const ratio = glide(target, t)
+    const ratio = glide(view.target, t)
     const pct = `${Math.round(ratio * 100)}%`
-    const count = delegating
-      ? `${batch.filter(a => a.status !== 'running').length}/${batch.length}`
-      : list.length
-        ? `${doneTasks}/${list.length}`
-        : ''
-
-    // o que o mascote faz: esperar você > tremer > comemorar > andar > dormir
-    const shaking = t < effects.errorUntil
-    const pose: Pose = asking
-      ? 'alert'
-      : shaking
-        ? 'shake'
-        : celebrating
-          ? 'jump'
-          : isWorking || delegating
-            ? 'walk'
-            : 'sleep'
-
-    const active = list.find(x => x.status === 'in_progress')
-    const title = asking
-      ? asking === 'permission'
-        ? L.needsPermission
-        : L.waitingForYou
-      : celebrating
-        ? L.done
-        : isWorking
-          ? m.activity && m.activity !== L.thinking
-            ? m.activity
-            : active?.activeForm || L.thinking
-          : delegating
-            ? L.waiting(running)
-            : active?.activeForm || active?.subject || L.tasks
 
     const color = shaking ? ERROR : delegating ? ROLES.boss.color : CLAY
     const els: any = $.ui.resolve(e)
@@ -704,16 +774,16 @@ export const register: Register = (on, options) => {
       // porcentagem a faixa dá a vez a quem está por baixo
       const width = Math.max(0, e.props.bodyColumns)
       if (width < pct.length) return next(e)
-      const crewLabel = `×${crew.length}`
+      const crewLabel = `×${view.crew}`
       let budget = width - pct.length
       const showCount = count !== '' && budget >= count.length + 1
       if (showCount) budget -= count.length + 1
-      const showCrew = crew.length > 0 && budget >= crewLabel.length + 1
+      const showCrew = view.crew > 0 && budget >= crewLabel.length + 1
       if (showCrew) budget -= crewLabel.length + 1
       // antes da barra, só símbolos: o do papel de quem trabalha (a coroa
       // enquanto delega), na cor desse papel, e a marca do humor
       const mood = { walk: '', jump: '✦', sleep: 'zz', alert: '!', shake: '✗' }[pose]
-      const who = delegating ? 'boss' : m.role
+      const who = delegating ? 'boss' : view.role
       const icon = [who ? ROLE_SYMBOL[who] : '', mood].filter(Boolean).join(' ')
       const iconColor = shaking || !who ? color : ROLES[who].color
       const showIcon = icon !== '' && budget >= icon.length + 1 + 1 + TITLE_MIN
@@ -782,7 +852,7 @@ export const register: Register = (on, options) => {
         <Box flexShrink={0} flexDirection="row" gap={1} alignItems="center">
           <Text bold>{pct}</Text>
           {count !== '' && <Text dimColor>{count}</Text>}
-          {crew.length > 0 && <Button key="crew" plain label={`×${crew.length}`} onPress={openPane} />}
+          {view.crew > 0 && <Button key="crew" plain label={`×${view.crew}`} onPress={openPane} />}
         </Box>
       </Box>
     )

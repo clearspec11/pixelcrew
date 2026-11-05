@@ -13,6 +13,7 @@ This fork (clearspec11/pixelcrew) tailors pixel-crew to an improvement-council s
 - **One band at a time.** While the council mod shows a running round above the prompt, pixel-crew steps aside. Once the round has finished, the council band gives way to new work.
 - **More words.** Walkthrough, usability, probe, smoke, live-check, sanity and GM pick the tester. Compat, survey, brief, catalog and compare pick the researcher. Mockup, sprite, palette, layout and theme pick the artist. Port, wire, migrate, patch and integrate pick the developer.
 - **Current prices and windows.** The cost estimate uses October 2026 list prices per model version, and the context gauge measures against each model's own window instead of a fixed 200K.
+- **The phone gets a status line.** The mobile app draws no band, so while it is attached pixel-crew keeps one status line in step with the band, for example `⚒ Doing the second · 50% · 1/2`. It stays clear in the terminal and desktop app, where the band already says it, and during a council round, whose own status line follows the round. `/crew-bar off` turns it off with the band.
 - **A "Done celebration" option.** `full` (confetti), `quiet` (a short hop) or `off`, in `/config` or `pluginConfigs`.
 
 It depends on the `council` plugin from the homelab-mods marketplace.
