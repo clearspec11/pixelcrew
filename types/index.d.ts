@@ -61,7 +61,21 @@ export type PcJob = {
   changes: boolean
   /** saved with /crew-add, not one of the defaults */
   own?: boolean
+  /** what the band's mascot wears while the job runs (guessed from the prompt when unset) */
+  hat?: PcHat
 }
+
+/** The look of the crew: today's workers, or a D&D adventuring party (`/crew-skin`). */
+export type PcSkin = 'crew' | 'party'
+
+/** A quick-run job's hat on the band's mascot. */
+export type PcHat = 'hardhat' | 'lantern' | 'magnifier' | 'goggles' | 'quill' | 'broom'
+
+/** A quick-run job's last run: when it ended, whether it went well, and its one-line result. */
+export type PcResult = { at: number; ok: boolean; line: string }
+
+/** The quick-run job whose turn is running now. */
+export type PcActiveJob = { name: string; hat: PcHat; startedAt: number }
 
 /** The council round in flight, from the Workflow call that launched it. */
 export type PcRound = { round: number; mode: string; project: string; startedAt: number }
@@ -114,6 +128,12 @@ declare module 'claude-code' {
       round: PcRound | null
       /** the person's last typed prompt, for /crew-add Name */
       lastPrompt: string
+      /** the crew's look (kept in $.store too) */
+      skin: PcSkin
+      /** the quick-run job running now, or null */
+      activeJob: PcActiveJob | null
+      /** each quick-run job's last result, by job name (kept in $.store too) */
+      results: Record<string, PcResult>
     }
   }
 }

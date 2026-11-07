@@ -1,8 +1,10 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { activityOf, recentOf, stripOf, windowLabel } from '../hooks/register'
-import { allJobs, ASK_FIRST, findJob, jobPrompt, JOBS, parseAdd } from '../hooks/quickrun'
+import { activityOf, parseSkin, recentOf, statusLine, stripOf, windowLabel } from '../hooks/register'
+import { ago, allJobs, ASK_FIRST, findJob, hatOf, jobOfPrompt, jobPrompt, JOBS, parseAdd, RESULT_ASK, resultLine } from '../hooks/quickrun'
+import { mascotSvg, PARTY, spriteSvg } from '../hooks/art'
 import { strings } from '../hooks/i18n'
+import type { PcRole } from '../types'
 
 // Leigh's fork: quick run, opened rows, the council stage strip, the totals
 
@@ -24,7 +26,55 @@ test('a job that changes files asks first; a read-only one goes as it is', () =>
   expect(jobPrompt(tidy)).toContain(ASK_FIRST)
   const docker = JOBS.find(j => j.name === 'Docker health')!
   expect(docker.changes).toBe(false)
-  expect(jobPrompt(docker)).toBe(docker.prompt)
+  expect(jobPrompt(docker)).toBe(`${docker.prompt} ${RESULT_ASK}`)
+  expect(jobPrompt(docker)).not.toContain(ASK_FIRST)
+})
+
+test('a job keeps a one-line result, wears a hat, and is known by its prompt', () => {
+  expect(resultLine('Lots of detail\n\n**Result:** 480 GB free · 68 GB clearable')).toBe('480 GB free · 68 GB clearable')
+  expect(resultLine('first\nthe last line wins without a tag')).toBe('the last line wins without a tag')
+  expect(resultLine(`Result: ${'x'.repeat(100)}`)).toHaveLength(70)
+  expect(JOBS.map(hatOf)).toEqual(['hardhat', 'lantern', 'magnifier', 'goggles', 'quill', 'lantern', 'broom', 'broom'])
+  expect(hatOf({ name: 'x', blurb: '', prompt: 'organise my photos folder', changes: true })).toBe('broom')
+  expect(hatOf({ name: 'x', blurb: '', prompt: 'which ports are open?', changes: false })).toBe('lantern')
+  const disk = JOBS.find(j => j.name === 'Disk space on C:')!
+  expect(jobOfPrompt([], jobPrompt(disk))?.name).toBe('Disk space on C:')
+  expect(jobOfPrompt([], 'hello')).toBeUndefined()
+  const t = Date.UTC(2026, 10, 7, 12)
+  expect([ago(t, t + 20_000), ago(t, t + 4 * 60_000), ago(t, t + 3 * 3_600_000), ago(t, t + 30 * 3_600_000), ago(t, t + 5 * 86_400_000)]).toEqual(['just now', '4m ago', '3h ago', 'yesterday', '5d ago'])
+  // the band's mascot in its job hat differs from the bare one
+  expect(mascotSvg('clawd', 'walk', 0, 2, true, 'crew', 'broom').source).not.toBe(mascotSvg('clawd', 'walk').source)
+})
+
+test('a quick-run turn: running while it works, then its result and Run again, kept in the store', EN, async ($, on) => {
+  mock.store(on, {})
+  on('command.register', () => ({ value: { command: 'x' } }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('prompt.submit', async (_$: any, e: any) => ({ text: e.text }))
+  on('turn.complete', async () => ({ text: '' }))
+  const disk = JOBS.find(j => j.name === 'Disk space on C:')!
+  await $.prompt.submit({ text: jobPrompt(disk) } as any)
+  let ui = await mountPane($, 'desktop')
+  expect(await ui.find({ type: 'Text', text: '● running' })).toBeDefined()
+  expect(await ui.find({ key: 'run-Disk space on C:' })).toBeUndefined()
+  await ui.unmount()
+  await $.turn.complete({ answer: 'C: has 480 GB free.\nResult: 480 GB free · 68 GB clearable', durationMs: 10, isAborted: false, turnId: 't', reason: 'completed' } as any)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    ui = await mountPane($, surface)
+    expect(await ui.find({ type: 'Text', text: '✓ just now' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '480 GB free · 68 GB clearable' })).toBeDefined()
+    expect((await ui.find({ key: 'run-Disk space on C:' }))?.text).toMatch(/Run again/)
+    await ui.unmount()
+  }
+  const listed: any = await $.command.run({ command: 'crew-run', args: '' } as any)
+  expect(listed.text).toContain('Disk space on C:: biggest folders, what is safe to clear (✓ just now: 480 GB free · 68 GB clearable)')
+  // an ordinary prompt afterwards keeps no result for it
+  await $.prompt.submit({ text: 'thanks' } as any)
+  await $.turn.complete({ answer: 'Result: nope', durationMs: 10, isAborted: false, turnId: 't2', reason: 'completed' } as any)
+  ui = await mountPane($, 'desktop')
+  expect(await ui.find({ type: 'Text', text: '480 GB free · 68 GB clearable' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'nope' })).toBeUndefined()
+  await ui.unmount()
 })
 
 test('/crew-add takes Name | prompt, or the last prompt you typed', () => {
@@ -135,4 +185,58 @@ test('/crew-add saves a job across sessions and /crew-remove takes it out', EN, 
   expect(removed.text).toBe('Removed "Ports".')
   const builtIn: any = await $.command.run({ command: 'crew-remove', args: 'Docker health' } as any)
   expect(builtIn.text).toContain('built-in job')
+})
+
+// ── the party skin (/crew-skin) ──
+
+test('/crew-skin party|crew picks the look, and nothing (or any other word) switches it', () => {
+  expect(parseSkin('party', 'crew')).toBe('party')
+  expect(parseSkin('D&D', 'crew')).toBe('party')
+  expect(parseSkin('dnd', 'crew')).toBe('party')
+  expect(parseSkin('party', 'party')).toBe('party')
+  expect(parseSkin('crew', 'party')).toBe('crew')
+  expect(parseSkin('off', 'party')).toBe('crew')
+  expect(parseSkin('default', 'crew')).toBe('crew')
+  expect(parseSkin('', 'crew')).toBe('party')
+  expect(parseSkin('', 'party')).toBe('crew')
+  expect(parseSkin('whatever', 'party')).toBe('crew')
+})
+
+test('the party skin dresses every role differently, in the panel and on the band', () => {
+  for (const role of Object.keys(PARTY) as PcRole[]) {
+    expect(spriteSvg(role, 2, false, 0, undefined, 'party').source).not.toBe(spriteSvg(role).source)
+  }
+  expect(mascotSvg('boss', 'walk', 0, 2, true, 'party').source).not.toBe(mascotSvg('boss', 'walk').source)
+  // the mascot itself (Claude, not delegating) is the same Clawd in both looks
+  expect(mascotSvg('clawd', 'walk', 0, 2, true, 'party').source).toBe(mascotSvg('clawd', 'walk').source)
+  const view = { title: 'Editing art.ts', target: 0.5, count: '', pose: 'walk' as const, delegating: false, shaking: false, role: 'developer' as const, crew: 0 }
+  expect(statusLine(view, 'party')).toBe('✶ Editing art.ts · 50%')
+  expect(statusLine(view)).toBe('⌨ Editing art.ts · 50%')
+})
+
+test('/crew-skin party names a developer agent the wizard in the panel, and /crew-skin alone goes back', EN, async ($, on) => {
+  mock.store(on, {})
+  on('command.register', () => ({ value: { command: 'x' } }))
+  on('agent.spawn', async () => ({ model: 'claude-opus-5-5', agentId: 'agent-w' }))
+  await $.agent.spawn({ prompt: 'go', description: 'Build the page', subagentType: 'general-purpose' } as any)
+
+  const party: any = await $.command.run({ command: 'crew-skin', args: 'party' } as any)
+  expect(party.text).toContain('D&D party')
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await mountPane($, surface)
+    expect(await ui.find({ text: 'wizard' })).toBeDefined()
+    expect(await ui.find({ text: 'developer' })).toBeUndefined()
+    if (surface === 'terminal') expect(await ui.find({ text: '✶' })).toBeDefined()
+    await ui.unmount()
+  }
+
+  const back: any = await $.command.run({ command: 'crew-skin', args: '' } as any)
+  expect(back.text).toContain('work clothes')
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await mountPane($, surface)
+    expect(await ui.find({ text: 'developer' })).toBeDefined()
+    expect(await ui.find({ text: 'wizard' })).toBeUndefined()
+    if (surface === 'terminal') expect(await ui.find({ text: '⌨' })).toBeDefined()
+    await ui.unmount()
+  }
 })

@@ -1,9 +1,9 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { PcAgent, PcFx, PcJob, PcMain, PcRole, PcRound, PcTask } from '../types'
-import { allJobs, findJob, jobPrompt, parseAdd } from './quickrun'
-import { ALERT, bandRaster, barRaster, barSvg, CLAY, fade, mascotSvg, MAX_RASTER_COLUMNS, ROLE_SYMBOL, ROLES, spriteRaster, spriteSvg } from './art'
+import type { PcActiveJob, PcAgent, PcFx, PcJob, PcMain, PcResult, PcRole, PcRound, PcSkin, PcTask } from '../types'
+import { ago, allJobs, findJob, hatOf, jobOfPrompt, jobPrompt, parseAdd, resultLine } from './quickrun'
+import { ALERT, bandRaster, barRaster, barSvg, CLAY, fade, mascotSvg, MAX_RASTER_COLUMNS, ROLES, roleLabel, roleSymbol, spriteRaster, spriteSvg } from './art'
 
 // terminal art budgets: the fewest columns worth drawing a band, a panel bar or
 // the text beside a sprite, and the title room the band keeps before its art
@@ -93,6 +93,17 @@ const quick = atom({ plugin: 'pixel-crew', key: 'quick' } as const, 'auto')
 const openRows = atom({ plugin: 'pixel-crew', key: 'openRows' } as const, [])
 const round = atom({ plugin: 'pixel-crew', key: 'round' } as const, null)
 const lastPrompt = atom({ plugin: 'pixel-crew', key: 'lastPrompt' } as const, '')
+const skin = atom({ plugin: 'pixel-crew', key: 'skin' } as const, 'crew')
+const activeJob = atom({ plugin: 'pixel-crew', key: 'activeJob' } as const, null)
+const results = atom({ plugin: 'pixel-crew', key: 'results' } as const, {})
+
+/** `/crew-skin party|crew`, or nothing to switch: the look asked for. */
+export function parseSkin(args: string, current: PcSkin): PcSkin {
+  const a = args.trim().toLowerCase()
+  if (/^(party|d&d|dnd|adventur|fantasy)/.test(a)) return 'party'
+  if (/^(crew|work|default|normal|off)/.test(a)) return 'crew'
+  return current === 'party' ? 'crew' : 'party'
+}
 const RECENT = 3
 
 const SHAKE_MS = 1200
@@ -488,10 +499,10 @@ async function bandView($: EngineInterface, appWorking: boolean, t = Date.now())
 }
 
 /** The band in one line: the mood or role symbol, what is happening, progress and count. */
-export function statusLine(v: BandView): string {
+export function statusLine(v: BandView, look: PcSkin = 'crew'): string {
   const mood = { walk: '', jump: '✦', sleep: 'zz', alert: '!', shake: '✗' }[v.pose]
   const who = v.delegating ? 'boss' : v.role
-  const icon = mood || (who ? ROLE_SYMBOL[who] : '')
+  const icon = mood || (who ? roleSymbol(who, look) : '')
   // in steps of 5%, so the phone is not sent a new line for every point
   const pct = v.pose === 'alert' ? '' : `${Math.round(v.target * 20) * 5}%`
   return [icon ? `${icon} ${v.title}` : v.title, pct, v.count].filter(Boolean).join(' · ')
@@ -512,7 +523,7 @@ async function updateStatus($: EngineInterface) {
   const councilRound = (await $.state.get(councilBand as never)).value as CouncilBand
   if ((await read($, bandOn)) && !(councilRound && !councilRound.isFinished)) {
     const view = await bandView($, false)
-    if (view) text = statusLine(view)
+    if (view) text = statusLine(view, await read($, skin))
   }
   if (text !== undefined && !(await $.session.surfaces()).includes('mobile')) text = undefined
   if (text === statusText) return
@@ -551,11 +562,16 @@ export const register: Register = (on, options) => {
     await $.command.register({ name: 'crew-add', description: 'Save a quick-run job for the Agents panel: Name | prompt, or Name alone for your last prompt', argumentHint: 'Name | what Claude should do' })
     await $.command.register({ name: 'crew-remove', description: 'Remove a quick-run job you saved', argumentHint: 'Name' })
     await $.command.register({ name: 'crew-run', description: 'Run a quick-run job by name, or list them', argumentHint: '[Name]' })
+    await $.command.register({ name: 'crew-skin', description: 'Dress the crew as a D&D party, or back as the crew', argumentHint: 'party | crew' })
     // a escolha do /crew-bar vale para as próximas sessões também
     const saved = await $.store.get('bandOn').catch(() => undefined)
     if (typeof saved === 'boolean') await update($, bandOn, () => saved)
     const savedJobs = await $.store.get('jobs').catch(() => undefined)
     if (Array.isArray(savedJobs)) await update($, jobs, () => savedJobs.filter((j: any) => j && typeof j.name === 'string' && typeof j.prompt === 'string'))
+    const savedSkin = await $.store.get('skin').catch(() => undefined)
+    if (savedSkin === 'party' || savedSkin === 'crew') await update($, skin, () => savedSkin)
+    const savedResults = await $.store.get('results').catch(() => undefined)
+    if (savedResults && typeof savedResults === 'object' && !Array.isArray(savedResults)) await update($, results, () => savedResults as Record<string, PcResult>)
 
     // Relógio da animação: troca o quadro 30x por segundo enquanto há agent
     // rodando ou tarefa em andamento; parado, não escreve nada.
@@ -632,7 +648,7 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'crew' }, async $ => {
     const opened = await $.ui.open({ id: PANE, title: 'Agents' })
     if (opened.isPlaced) return { text: L.paneOpened }
-    return { text: crewText(await read($, agents), await read($, now), await read($, tasks)) }
+    return { text: crewText(await read($, agents), await read($, now), await read($, tasks), await read($, skin)) }
   })
 
   // /crew-bar alterna; /crew-bar on|off (ou ligar/desligar, activar/desactivar) escolhe
@@ -674,12 +690,29 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'crew-run' }, async ($, e) => {
     const own = await read($, jobs)
     if (!e.args.trim()) {
-      return { text: ['Quick-run jobs (◇ reads only, ◆ changes files after your OK):', ...allJobs(own).map(j => `${j.changes ? '◆' : '◇'} ${j.name}: ${j.blurb}`), 'Run one with /crew-run Name.'].join('\n') }
+      const done = await read($, results)
+      const last = (j: PcJob) => {
+        const r = done[j.name]
+        return r ? ` (${r.ok ? '✓' : '✗'} ${ago(r.at)}: ${r.line})` : ''
+      }
+      return { text: ['Quick-run jobs (◇ reads only, ◆ changes files after your OK):', ...allJobs(own).map(j => `${j.changes ? '◆' : '◇'} ${j.name}: ${j.blurb}${last(j)}`), 'Run one with /crew-run Name.'].join('\n') }
     }
     const job = findJob(own, e.args)
     if (!job) return { text: `No job named "${e.args.trim()}". /crew-run lists them.` }
     void $.prompt.submit({ text: jobPrompt(job) })
     return { text: `Running "${job.name}".` }
+  })
+
+  on('command.run', { command: 'crew-skin' }, async ($, e) => {
+    const want = parseSkin(e.args, await read($, skin))
+    await update($, skin, () => want)
+    await $.store.set('skin', want).catch(() => {})
+    return {
+      text:
+        want === 'party'
+          ? 'The crew is a D&D party now: wizards, clerics, rangers, fighters and bards, a rogue, a sage and a herald for the council, and Claude as the dungeon master. /crew-skin crew to go back.'
+          : 'The crew is back in its work clothes. /crew-skin party for the D&D party.',
+    }
   })
 
   on('command.run', { command: 'crew-clear' }, async $ => {
@@ -728,6 +761,9 @@ export const register: Register = (on, options) => {
     if (origin !== 'plugin' && !e.isMeta && !e.command && e.text && !e.text.trimStart().startsWith('/')) {
       await update($, lastPrompt, () => e.text.slice(0, 4000)).catch(() => {})
     }
+    // a quick-run job's prompt: the band's mascot puts its hat on, and the turn's end keeps its result
+    const job = e.text ? jobOfPrompt(await read($, jobs).catch(() => [] as PcJob[]), e.text) : undefined
+    await update($, activeJob, () => (job ? { name: job.name, hat: hatOf(job), startedAt: Date.now() } : null)).catch(() => {})
     await update($, main, () => ({ activity: L.thinking, steps: 0, tools: 0, working: true, done: false })).catch(
       () => {},
     )
@@ -789,6 +825,15 @@ export const register: Register = (on, options) => {
       await update($, main, m => ({ ...m, activity: L.done, working: false, done: true })).catch(() => {})
       // fim do turno: confete, se terminou bem e ninguém da equipe ainda trabalha
       const ok = e.reason !== 'error' && e.reason !== 'aborted' && e.reason !== 'refusal'
+      // a quick-run job's turn: keep its one-line result under the job, across sessions
+      const job = await read($, activeJob).catch(() => null as PcActiveJob | null)
+      if (job) {
+        const line = resultLine(String(e.answer ?? '')) || (e.reason === 'aborted' ? 'stopped before it finished' : ok ? 'done' : 'failed')
+        const kept = { ...(await read($, results).catch(() => ({}) as Record<string, PcResult>)), [job.name]: { at: Date.now(), ok, line } }
+        await update($, results, () => kept).catch(() => {})
+        await update($, activeJob, () => null).catch(() => {})
+        await $.store.set('results', kept).catch(() => {})
+      }
       const crewBusy = (await read($, agents).catch(() => [] as PcAgent[])).some(a => a.status === 'running')
       await update($, fx, f => ({
         ...f,
@@ -903,6 +948,9 @@ export const register: Register = (on, options) => {
     if (!view) return next(e)
     const { title, count, pose, delegating, shaking } = view
     const f = await read($, frame)
+    // the crew's look (/crew-skin) and the quick-run job's hat, on the mascot
+    const look = await read($, skin)
+    const job = await read($, activeJob)
     const ratio = glide(view.target, t)
     const pct = `${Math.round(ratio * 100)}%`
     // esperando você (permissão ou pergunta): barra e título em âmbar, e sem
@@ -944,7 +992,7 @@ export const register: Register = (on, options) => {
       // enquanto delega), na cor desse papel, e a marca do humor
       const mood = { walk: '', jump: '✦', sleep: 'zz', alert: '!', shake: '✗' }[pose]
       const who = delegating ? 'boss' : view.role
-      const icon = [who ? ROLE_SYMBOL[who] : '', mood].filter(Boolean).join(' ')
+      const icon = [who ? roleSymbol(who, look) : '', mood].filter(Boolean).join(' ')
       const iconColor = shaking ? color : alerting ? alertInk : !who ? color : ROLES[who].color
       const showIcon = icon !== '' && budget >= icon.length + 1 + 1 + TITLE_MIN
       if (showIcon) budget -= icon.length + 1
@@ -988,7 +1036,7 @@ export const register: Register = (on, options) => {
     // ele é o boss, de coroa e capa. O boss usa o mesmo px do Clawd: a faixa
     // não pode mudar de altura quando ele delega (o terminal também não muda).
     const confetti = celebration === 'full'
-    const sprite = mascotSvg(delegating ? 'boss' : 'clawd', pose, f, 2, confetti)
+    const sprite = mascotSvg(delegating ? 'boss' : 'clawd', pose, f, 2, confetti, look, delegating ? undefined : job?.hat)
     return (
       <Box flexDirection="row" alignItems="center" gap={1} paddingX={1}>
         <Box width="30%" flexShrink={0} overflow="hidden">
@@ -1043,7 +1091,7 @@ export const register: Register = (on, options) => {
 
   // o painel em texto, para quem vê a sessão de fora (telefone, web, app
   // remoto): nenhuma superfície desenha painéis ali, só o texto do comando chega
-  const crewText = (crew: PcAgent[], t: number, mainTasks: { status: string; subject?: string }[]) => {
+  const crewText = (crew: PcAgent[], t: number, mainTasks: { status: string; subject?: string }[], look: PcSkin = 'crew') => {
     const clock = Math.max(t, Date.now())
     const running = crew.filter(a => a.status === 'running')
     const finished = crew.filter(a => a.status !== 'running')
@@ -1055,7 +1103,7 @@ export const register: Register = (on, options) => {
     const kit = mainTasks.find(x => x.status === 'in_progress')?.subject ?? (crew.length ? L.team : L.noAgentsYet)
     const line = (a: PcAgent) => {
       const { progress, phase, stats, mark, sub } = facts(a, clock)
-      const label = (a.persona ? personaOf(a.persona)?.name : undefined) ?? ROLES[a.role].label
+      const label = (a.persona ? personaOf(a.persona)?.name : undefined) ?? roleLabel(a.role, look)
       return `${mark} ${a.description} — ${label} · ${sub} · ${progress}${phase ? ` · ${phase}` : ''} · ${stats.replace(/\s+/g, ' ')}`
     }
     const out = [
@@ -1075,6 +1123,8 @@ export const register: Register = (on, options) => {
     const t = await read($, now)
     const f = await read($, frame)
     const expanded = await read($, showDone)
+    // the crew's look (/crew-skin): each row's label, symbol and sprite follow it
+    const look = await read($, skin)
     const els: any = $.ui.resolve(e)
     const { Box, Text, Button } = els
     const isTerm = e.surface === 'terminal'
@@ -1143,6 +1193,7 @@ export const register: Register = (on, options) => {
 
     const row = (a: PcAgent) => {
       const info = ROLES[a.role]
+      const label = roleLabel(a.role, look)
       // a council persona keeps its own colour; the gear still says the stage
       const persona = a.persona ? personaOf(a.persona) : undefined
       const tint = persona?.color ?? info.color
@@ -1181,13 +1232,13 @@ export const register: Register = (on, options) => {
             <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
               <Box flexDirection="row" justifyContent="space-between" gap={1}>
                 <Box flexDirection="row" gap={1} flexShrink={1} minWidth={0} overflow="hidden">
-                  <Text color={done ? fade(tint) : tint}>{ROLE_SYMBOL[a.role]}</Text>
+                  <Text color={done ? fade(tint) : tint}>{roleSymbol(a.role, look)}</Text>
                   {title}
                 </Box>
                 <Text color={markColor}>{mark}</Text>
               </Box>
               <Box flexDirection="row" gap={1}>
-                <Text color={tint}>{info.label}</Text>
+                <Text color={tint}>{label}</Text>
                 <Text dimColor>{sub}</Text>
               </Box>
               <Box flexDirection="row" justifyContent="space-between" gap={1}>
@@ -1204,11 +1255,11 @@ export const register: Register = (on, options) => {
       }
 
       const { Svg } = els
-      const sprite = spriteSvg(a.role, 2, a.status === 'running', Math.floor(f / 9), persona?.color)
+      const sprite = spriteSvg(a.role, 2, a.status === 'running', Math.floor(f / 9), persona?.color, look)
       return (
         <Box key={`a-${a.id}`} flexDirection="row" gap={1} paddingY={1} alignItems="flex-start">
           <Box flexShrink={0} alignItems="center">
-            <Svg source={sprite.source} alt={L.altCharacter(info.label)} width={sprite.width} height={sprite.height} />
+            <Svg source={sprite.source} alt={L.altCharacter(label)} width={sprite.width} height={sprite.height} />
           </Box>
           <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
             <Box flexDirection="row" justifyContent="space-between" gap={1}>
@@ -1218,7 +1269,7 @@ export const register: Register = (on, options) => {
               <Text color={markColor}>{mark}</Text>
             </Box>
             <Box flexDirection="row" gap={1}>
-              <Text color={tint}>{info.label}</Text>
+              <Text color={tint}>{label}</Text>
               <Text dimColor>{sub}</Text>
             </Box>
             <Box flexDirection="row" justifyContent="space-between" gap={1}>
@@ -1281,6 +1332,8 @@ export const register: Register = (on, options) => {
     const list = allJobs(own)
     const q = await read($, quick)
     const shownJob = await read($, openJob)
+    const lastRuns = await read($, results)
+    const live = await read($, activeJob)
     const quickOpen = q === 'open' || (q === 'auto' && running.length === 0)
     const runJob = (job: PcJob) => async () => {
       await update($, quick, () => 'auto')
@@ -1289,17 +1342,34 @@ export const register: Register = (on, options) => {
     }
     const jobRow = (job: PcJob) => {
       const showing = shownJob === job.name
+      // the run in flight, else the last one: when, how it went, its one-line result
+      const isLive = live?.name === job.name
+      const last = lastRuns[job.name]
+      const status = isLive
+        ? { text: '● running', color: CLAY }
+        : last
+          ? { text: `${last.ok ? '✓' : '✗'} ${ago(last.at, clock)}`, color: last.ok ? '#3FB27F' : ERROR }
+          : null
       return (
         <Box key={`job-${job.name}`} flexDirection="column">
           <Box flexDirection="row" gap={1} alignItems="center">
             <Text color={job.changes ? 'warning' : 'suggestion'}>{job.changes ? '◆' : '◇'}</Text>
             <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
-              <Button key={`jobname-${job.name}`} plain onPress={() => update($, openJob, v => (v === job.name ? '' : job.name))}>
-                <Text wrap="truncate">{`${showing ? '▾ ' : ''}${job.name}`}</Text>
-              </Button>
-              {!isTerm && <Text dimColor wrap="truncate">{job.blurb}</Text>}
+              <Box flexDirection="row" gap={1}>
+                <Box flexShrink={1} minWidth={0}>
+                  <Button key={`jobname-${job.name}`} plain onPress={() => update($, openJob, v => (v === job.name ? '' : job.name))}>
+                    <Text wrap="truncate">{`${showing ? '▾ ' : ''}${job.name}`}</Text>
+                  </Button>
+                </Box>
+                {status && <Text key={`jobstatus-${job.name}`} color={status.color}>{status.text}</Text>}
+              </Box>
+              {last && !isLive ? (
+                <Text key={`jobresult-${job.name}`} dimColor wrap="truncate">{last.line}</Text>
+              ) : (
+                !isTerm && <Text dimColor wrap="truncate">{job.blurb}</Text>
+              )}
             </Box>
-            <Button key={`run-${job.name}`} label="Run" onPress={runJob(job)} />
+            {!isLive && <Button key={`run-${job.name}`} label={last ? 'Run again' : 'Run'} onPress={runJob(job)} />}
           </Box>
           {showing && (
             <Box paddingLeft={2}>

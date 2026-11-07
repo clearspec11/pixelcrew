@@ -1,4 +1,4 @@
-import type { PcRole } from '../types'
+import type { PcHat, PcRole, PcSkin } from '../types'
 
 // Paleta "Argila Claude" da barra principal
 export const CLAY = '#D97757'
@@ -20,6 +20,28 @@ export const ROLES: Record<PcRole, RoleInfo> = {
   voter: { label: "voter", color: "#D4A017", light: "#EBC65E" },
   scribe: { label: "scribe", color: "#A04FB8", light: "#C98FDA" },
   skeptic: { label: "skeptic", color: "#1FA8C4", light: "#7BCFE0" },
+}
+
+/** The party skin's name and symbol for each role (`/crew-skin party`). */
+export const PARTY: Record<PcRole, { label: string; symbol: string }> = {
+  developer: { label: 'wizard', symbol: '✶' },
+  artist: { label: 'bard', symbol: '♪' },
+  researcher: { label: 'ranger', symbol: '➶' },
+  worker: { label: 'fighter', symbol: '⚔' },
+  boss: { label: 'dungeon master', symbol: '⚅' },
+  tester: { label: 'cleric', symbol: '✚' },
+  codex: { label: 'warforged', symbol: '⚙' },
+  voter: { label: 'herald', symbol: '⚑' },
+  scribe: { label: 'sage', symbol: '❦' },
+  skeptic: { label: 'rogue', symbol: '†' },
+}
+
+export function roleLabel(role: PcRole, skin: PcSkin = 'crew'): string {
+  return skin === 'party' ? PARTY[role].label : ROLES[role].label
+}
+
+export function roleSymbol(role: PcRole, skin: PcSkin = 'crew'): string {
+  return skin === 'party' ? PARTY[role].symbol : ROLE_SYMBOL[role]
 }
 
 /** One symbol per role, drawn before the bar and on each panel row. */
@@ -48,6 +70,8 @@ const PAL: Record<string, string> = {
   U: "#6A4BE0", u: "#4A32B0",
   // council gear: pale lens glass
   c: "#B9DDF3",
+  // the party skin: the ranger's greens
+  T: "#3E8A3A", t: "#2C5E28",
 }
 
 const W = 18
@@ -194,27 +218,159 @@ const GEAR: Record<Exclude<PcRole, "codex">, (g: Grid) => void> = {
 }
 
 // Codex: um robozinho de tela, personagem próprio
-function codex(g: Grid) {
-  box(g, "A", 8, 9, 0, 0)
+function codex(g: Grid, a = "A") {
+  box(g, a, 8, 9, 0, 0)
   box(g, "Z", 8, 9, 1, 2)
   box(g, "O", 4, 13, 3, 8)
   box(g, "S", 5, 12, 4, 7)
-  box(g, "A", 7, 7, 5, 5)
-  box(g, "A", 10, 10, 5, 5)
-  box(g, "A", 8, 9, 6, 6)
-  box(g, "A", 5, 12, 9, 11)
+  box(g, a, 7, 7, 5, 5)
+  box(g, a, 10, 10, 5, 5)
+  box(g, a, 8, 9, 6, 6)
+  box(g, a, 5, 12, 9, 11)
   box(g, "Z", 2, 4, 9, 10)
   box(g, "Z", 13, 15, 9, 10)
   box(g, "D", 6, 7, 12, 13)
   box(g, "D", 10, 11, 12, 13)
 }
 
-function grid(role: PcRole | "clawd"): Grid {
+// The party skin: the same Clawd, dressed for a D&D table
+const PARTY_GEAR: Record<Exclude<PcRole, "codex">, (g: Grid) => void> = {
+  // wizard: a tall blue hat with stars, a staff with a glowing orb
+  developer: g => {
+    dot(g, "C", [10, 0])
+    box(g, "C", 9, 10, 1, 1)
+    box(g, "C", 8, 11, 2, 2)
+    box(g, "C", 7, 11, 3, 3)
+    box(g, "C", 6, 12, 4, 4)
+    dot(g, "Y", [8, 3], [10, 2])
+    box(g, "I", 3, 14, 5, 5)
+    // the staff stands on the ground, the hand on it
+    box(g, "H", 16, 16, 2, 14)
+    box(g, "c", 15, 17, 0, 1)
+    dot(g, "W", [15, 0])
+    dot(g, "X", [16, 9])
+  },
+  // cleric: a white hood with gold trim, a holy symbol on the chest, a mace
+  tester: g => {
+    box(g, "W", 5, 12, 3, 5)
+    box(g, "Q", 4, 13, 5, 5)
+    dot(g, "Q", [8, 2], [9, 2])
+    // the cross sits under the eyes, not through them
+    box(g, "Q", 8, 9, 10, 12)
+    box(g, "Q", 7, 10, 11, 11)
+    box(g, "H", 16, 16, 6, 10)
+    box(g, "g", 15, 17, 3, 5)
+    dot(g, "G", [16, 4])
+  },
+  // ranger: a green hood and cloak (the hands out of it, like the boss's
+  // cape), a longbow, a quiver with two red-fletched arrows
+  researcher: g => {
+    box(g, "T", 5, 12, 3, 5)
+    dot(g, "T", [13, 3], [13, 4], [14, 4])
+    box(g, "t", 3, 3, 6, 12)
+    box(g, "t", 14, 14, 6, 12)
+    dot(g, "H", [1, 3], [0, 4], [0, 5], [0, 6], [0, 7], [0, 8], [0, 9], [0, 10], [0, 11], [1, 12])
+    box(g, "W", 1, 1, 4, 11)
+    box(g, "F", 16, 17, 4, 8)
+    dot(g, "f", [16, 6], [17, 6])
+    dot(g, "P", [16, 2], [17, 1])
+    dot(g, "H", [16, 3], [17, 2], [17, 3])
+  },
+  // fighter: a steel helm with a red plume, a sword, a blue shield
+  worker: g => {
+    box(g, "g", 5, 12, 3, 5)
+    box(g, "G", 6, 11, 3, 3)
+    box(g, "K", 5, 12, 5, 5)
+    box(g, "P", 8, 9, 1, 2)
+    box(g, "W", 16, 16, 0, 7)
+    box(g, "Q", 15, 17, 8, 8)
+    box(g, "H", 16, 16, 9, 10)
+    box(g, "C", 0, 2, 7, 12)
+    dot(g, "Q", [1, 9], [1, 10])
+  },
+  // bard: a red feathered cap and a lute, the hand on its neck and its body
+  // below the arm
+  artist: g => {
+    box(g, "R", 6, 11, 3, 4)
+    box(g, "p", 5, 12, 5, 5)
+    dot(g, "Y", [11, 2], [12, 1], [13, 0], [12, 2])
+    box(g, "F", 15, 17, 11, 13)
+    dot(g, "E", [16, 12])
+    box(g, "H", 16, 16, 6, 10)
+    dot(g, "f", [16, 5], [17, 5])
+  },
+  // dungeon master: a purple hood and robe, the DM screen, a red d20
+  boss: g => {
+    box(g, "U", 5, 12, 3, 5)
+    dot(g, "U", [8, 2], [9, 2])
+    box(g, "u", 3, 3, 6, 13)
+    box(g, "u", 14, 14, 6, 13)
+    box(g, "H", 5, 12, 11, 12)
+    dot(g, "f", [6, 11], [11, 11])
+    box(g, "R", 15, 17, 6, 8)
+    dot(g, "R", [16, 5], [16, 9])
+    dot(g, "W", [16, 7])
+  },
+  // rogue: a dark hood, a mask across the eyes (the eyes drawn back on it), a dagger
+  skeptic: g => {
+    box(g, "K", 5, 12, 3, 5)
+    dot(g, "K", [4, 5], [13, 5])
+    box(g, "k", 4, 13, 8, 9)
+    eyes(g)
+    box(g, "W", 1, 1, 3, 7)
+    box(g, "Q", 0, 2, 8, 8)
+    box(g, "H", 1, 1, 9, 10)
+  },
+  // sage: a grey hood, a white beard, a thick tome tucked under the arm (the
+  // arm drawn back over it)
+  scribe: g => {
+    box(g, "g", 5, 12, 3, 5)
+    dot(g, "g", [8, 2], [9, 2])
+    box(g, "W", 6, 11, 10, 12)
+    eyes(g)
+    box(g, "N", 0, 3, 9, 12)
+    box(g, "H", 0, 0, 9, 12)
+    dot(g, "n", [2, 11], [3, 11])
+    box(g, "X", 2, 3, 9, 10)
+  },
+  // herald: a red-and-gold banner on a pole, the rosette kept
+  voter: g => {
+    box(g, "H", 17, 17, 0, 12)
+    box(g, "P", 13, 16, 1, 4)
+    box(g, "Q", 13, 16, 3, 3)
+    dot(g, "X", [16, 9], [16, 10])
+    box(g, "Q", 7, 9, 10, 12)
+    dot(g, "P", [8, 11])
+  },
+}
+
+// what the band's mascot wears while a quick-run job runs
+const HATS: Record<PcHat, (g: Grid) => void> = {
+  hardhat: GEAR.worker,
+  lantern: GEAR.researcher,
+  magnifier: GEAR.skeptic,
+  goggles: GEAR.tester,
+  quill: GEAR.scribe,
+  // a red bandana and a broom with straw bristles
+  broom: g => {
+    box(g, "R", 5, 12, 4, 5)
+    dot(g, "R", [13, 5], [14, 6])
+    box(g, "H", 16, 16, 1, 9)
+    box(g, "Y", 15, 17, 10, 13)
+    box(g, "y", 15, 17, 10, 10)
+  },
+}
+
+function grid(role: PcRole | "clawd", skin: PcSkin = "crew", hat?: PcHat): Grid {
   const g: Grid = Array.from({ length: H }, () => Array<string>(W).fill("."))
-  if (role === "codex") codex(g)
-  else {
+  if (role === "codex") {
+    // the warforged: the same robot, amber-eyed, with a leather strap
+    codex(g, skin === "party" ? "Q" : "A")
+    if (skin === "party") box(g, "H", 4, 13, 8, 8)
+  } else {
     clawd(g)
-    if (role !== "clawd") GEAR[role](g)
+    if (role !== "clawd") (skin === "party" ? PARTY_GEAR : GEAR)[role](g)
+    else if (hat) HATS[hat](g)
   }
   return g
 }
@@ -227,8 +383,8 @@ export type Sprite = { source: string; width: number; height: number }
  * `bob`, o quadro ímpar sobe 1 pixel: o mod troca o quadro enquanto ele
  * trabalha, então o personagem pula.
  */
-export function spriteSvg(role: PcRole | "clawd", px = 2, bob = false, frame = 0, body?: string): Sprite {
-  const g = grid(role)
+export function spriteSvg(role: PcRole | "clawd", px = 2, bob = false, frame = 0, body?: string, skin: PcSkin = "crew"): Sprite {
+  const g = grid(role, skin)
   // a council persona's colour paints the body (X) in place of the clay
   const paint = (ch: string) => (ch === "X" && body ? body : PAL[ch])
   let top = H
@@ -283,8 +439,8 @@ export type Pixel = { x: number; y: number; fill: string }
  * Os pixels do mascote numa pose e num quadro, no quadro fixo de 18x16 (y de
  * -1 a 14): o SVG da faixa e o Raster do terminal desenham os mesmos.
  */
-export function mascotPixels(role: 'clawd' | 'boss', pose: Pose, frame = 0, confetti = true): Pixel[] {
-  const g = grid(role)
+export function mascotPixels(role: 'clawd' | 'boss', pose: Pose, frame = 0, confetti = true, skin: PcSkin = 'crew', hat?: PcHat): Pixel[] {
+  const g = grid(role, skin, hat)
   // o relógio anda a 30 quadros por segundo: passos e pulo trocam a cada 6
   // quadros (5x por segundo) e o confete cai a cada 3, para o Clawd não sair
   // correndo
@@ -350,8 +506,8 @@ export function mascotPixels(role: 'clawd' | 'boss', pose: Pose, frame = 0, conf
  * ele anda pela barra sem tremer o layout. Confete, "zz" e "!" ocupam o espaço
  * acima da cabeça.
  */
-export function mascotSvg(role: 'clawd' | 'boss', pose: Pose, frame = 0, px = 2, confetti = true): Sprite {
-  const rects = mascotPixels(role, pose, frame, confetti)
+export function mascotSvg(role: 'clawd' | 'boss', pose: Pose, frame = 0, px = 2, confetti = true, skin: PcSkin = 'crew', hat?: PcHat): Sprite {
+  const rects = mascotPixels(role, pose, frame, confetti, skin, hat)
     .map(p => `<rect x="${p.x}" y="${p.y}" width="1.02" height="1.02" fill="${p.fill}"/>`)
     .join('')
   const vh = H + 1

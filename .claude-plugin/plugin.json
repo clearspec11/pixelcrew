@@ -1,6 +1,6 @@
 {
   "name": "pixel-crew",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Pixel-art progress bar with the Claude mascot and a side panel that turns your subagents into a crew of characters. Leigh's fork: improvement-council stages and personas get their own characters.",
   "author": {
     "name": "Trackszx"
