@@ -43,7 +43,31 @@ export type PcAgent = {
   stage?: string
   /** a council persona's key (`dot`, `vex`), when the label names one */
   persona?: string
+  /** the task the agent was given, as the spawn's prompt said it */
+  prompt?: string
+  /** its last few tool uses, newest last ("Edit CampaignView.jsx") */
+  recent?: string[]
+  /** why it stopped, when it failed */
+  reason?: string
 }
+
+/** A ready-made job the Agents panel runs with one press: a prompt handed to Claude. */
+export type PcJob = {
+  name: string
+  /** one line under the name */
+  blurb: string
+  prompt: string
+  /** it changes files (listed first, done only after your OK); else it only reads */
+  changes: boolean
+  /** saved with /crew-add, not one of the defaults */
+  own?: boolean
+}
+
+/** The council round in flight, from the Workflow call that launched it. */
+export type PcRound = { round: number; mode: string; project: string; startedAt: number }
+
+/** The quick-run list: open by itself while nobody works, else folded; or as the person set it. */
+export type PcQuick = 'auto' | 'open' | 'closed'
 
 /** O que o agent principal (o Claude da conversa) está fazendo no turno atual. */
 export type PcMain = {
@@ -79,6 +103,17 @@ declare module 'claude-code' {
       main: PcMain
       batchStart: number
       fx: PcFx
+      /** jobs saved with /crew-add (kept in $.store too) */
+      jobs: PcJob[]
+      /** the quick-run job whose prompt is shown, or '' */
+      openJob: string
+      quick: PcQuick
+      /** agent rows opened to show their task, steps and last tools */
+      openRows: string[]
+      /** the council round in flight, or null */
+      round: PcRound | null
+      /** the person's last typed prompt, for /crew-add Name */
+      lastPrompt: string
     }
   }
 }

@@ -1,7 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { PcAgent, PcFx, PcMain, PcRole, PcTask } from '../types'
+import type { PcAgent, PcFx, PcJob, PcMain, PcRole, PcRound, PcTask } from '../types'
+import { allJobs, findJob, jobPrompt, parseAdd } from './quickrun'
 import { ALERT, bandRaster, barRaster, barSvg, CLAY, fade, mascotSvg, MAX_RASTER_COLUMNS, ROLE_SYMBOL, ROLES, spriteRaster, spriteSvg } from './art'
 
 // terminal art budgets: the fewest columns worth drawing a band, a panel bar or
@@ -70,6 +71,8 @@ const CELEBRATE: Record<Celebration, number> = { full: 2500, quiet: 1200, off: 0
 // the council mod's band: while a round runs it carries the band and pixel-crew steps aside
 const councilBand = { plugin: 'council', key: 'band' } as const
 const councilBandHidden = { plugin: 'council', key: 'isBandHidden' } as const
+// the council mod declares no band today: these reads find nothing and pixel-crew keeps the band
+type CouncilBand = { isFinished?: boolean } | undefined
 
 const tasks = atom({ plugin: 'pixel-crew', key: 'tasks' } as const, [])
 const agents = atom({ plugin: 'pixel-crew', key: 'agents' } as const, [])
@@ -83,6 +86,14 @@ const main = atom({ plugin: 'pixel-crew', key: 'main' } as const, IDLE)
 const batchStart = atom({ plugin: 'pixel-crew', key: 'batchStart' } as const, 0)
 const CALM: PcFx = { celebrateUntil: 0, errorUntil: 0, asking: null }
 const fx = atom({ plugin: 'pixel-crew', key: 'fx' } as const, CALM)
+// Leigh's fork: quick-run jobs, opened rows and the council round's stage strip
+const jobs = atom({ plugin: 'pixel-crew', key: 'jobs' } as const, [])
+const openJob = atom({ plugin: 'pixel-crew', key: 'openJob' } as const, '')
+const quick = atom({ plugin: 'pixel-crew', key: 'quick' } as const, 'auto')
+const openRows = atom({ plugin: 'pixel-crew', key: 'openRows' } as const, [])
+const round = atom({ plugin: 'pixel-crew', key: 'round' } as const, null)
+const lastPrompt = atom({ plugin: 'pixel-crew', key: 'lastPrompt' } as const, '')
+const RECENT = 3
 
 const SHAKE_MS = 1200
 const ERROR = '#E24B4A'
@@ -278,6 +289,75 @@ export function activityOf(tool: string, input: any, s: Strings = L): string {
   }
 }
 
+const clip = (s: unknown, n: number) => {
+  const t = String(s ?? '').replace(/\s+/g, ' ').trim()
+  return t.length <= n ? t : `${t.slice(0, n - 1).trimEnd()}…`
+}
+
+/** One line for an agent's "last tools": the tool and what it touched. */
+export function recentOf(tool: string, input: any): string {
+  switch (tool) {
+    case 'Read':
+    case 'Edit':
+    case 'MultiEdit':
+    case 'Write':
+      return `${tool} ${base(input?.file_path)}`
+    case 'Grep':
+      return `Grep "${clip(input?.pattern, 28)}"`
+    case 'Glob':
+      return `Glob ${clip(input?.pattern, 30)}`
+    case 'Bash':
+    case 'PowerShell':
+      return `${tool}: ${clip(input?.description || input?.command, 40)}`
+    default:
+      return clip(tool.startsWith('mcp__') ? tool.split('__').pop() : tool, 40)
+  }
+}
+
+/** "1M", "200K": the window an agent's context is measured against. */
+export function windowLabel(model: string): string {
+  const w = windowOf(model)
+  return w >= 1_000_000 ? `${w / 1_000_000}M` : `${Math.round(w / 1000)}K`
+}
+
+/** The council stage strip's five steps, and the label stages each one counts. */
+export const STRIP: ReadonlyArray<[string, readonly string[]]> = [
+  ['Propose', ['propose']],
+  ['Merge', ['merge']],
+  ['Vote', ['vote']],
+  ['Build', ['preflight', 'build', 'salvage', 'verify']],
+  ['Review', ['review', 'regress']],
+]
+
+export type StripStep = { label: string; text: string; state: 'done' | 'active' | 'pending' }
+
+/** The stage strip for a council round's agents, or null when none of them is a council agent. */
+export function stripOf(crew: readonly PcAgent[]): StripStep[] | null {
+  const council = crew.filter(a => a.stage)
+  if (!council.length) return null
+  const groups = STRIP.map(([label, stages]) => {
+    const own = council.filter(a => stages.includes(a.stage!))
+    const builds = own.filter(a => a.stage === 'build')
+    return {
+      label,
+      total: own.length,
+      running: own.filter(a => a.status === 'running').length,
+      text:
+        label === 'Build' && builds.length
+          ? `${label} ${builds.filter(a => a.status !== 'running').length}/${builds.length}`
+          : own.length
+            ? `${label} ${own.length}`
+            : label,
+    }
+  })
+  const lastSeen = groups.reduce((at, g, i) => (g.total ? i : at), -1)
+  return groups.map((g, i) => ({
+    label: g.label,
+    text: g.text,
+    state: g.running ? 'active' : g.total && (i < lastSeen || groups.every(x => !x.running)) ? 'done' : 'pending',
+  }))
+}
+
 function applyTaskTool(list: readonly PcTask[], tool: string, input: any, result: any): PcTask[] | null {
   if (tool === 'TodoWrite' && Array.isArray(input?.todos)) {
     return input.todos.map((t: any, i: number) => ({
@@ -429,8 +509,8 @@ let statusBusy = false
  */
 async function updateStatus($: EngineInterface) {
   let text: string | undefined
-  const round = (await $.state.get(councilBand)).value
-  if ((await read($, bandOn)) && !(round && !round.isFinished)) {
+  const councilRound = (await $.state.get(councilBand as never)).value as CouncilBand
+  if ((await read($, bandOn)) && !(councilRound && !councilRound.isFinished)) {
     const view = await bandView($, false)
     if (view) text = statusLine(view)
   }
@@ -468,9 +548,14 @@ export const register: Register = (on, options) => {
     await $.command.register({ name: 'crew', description: L.cmdCrew })
     await $.command.register({ name: 'crew-clear', description: L.cmdClear })
     await $.command.register({ name: 'crew-bar', description: L.cmdBar })
+    await $.command.register({ name: 'crew-add', description: 'Save a quick-run job for the Agents panel: Name | prompt, or Name alone for your last prompt', argumentHint: 'Name | what Claude should do' })
+    await $.command.register({ name: 'crew-remove', description: 'Remove a quick-run job you saved', argumentHint: 'Name' })
+    await $.command.register({ name: 'crew-run', description: 'Run a quick-run job by name, or list them', argumentHint: '[Name]' })
     // a escolha do /crew-bar vale para as próximas sessões também
     const saved = await $.store.get('bandOn').catch(() => undefined)
     if (typeof saved === 'boolean') await update($, bandOn, () => saved)
+    const savedJobs = await $.store.get('jobs').catch(() => undefined)
+    if (Array.isArray(savedJobs)) await update($, jobs, () => savedJobs.filter((j: any) => j && typeof j.name === 'string' && typeof j.prompt === 'string'))
 
     // Relógio da animação: troca o quadro 30x por segundo enquanto há agent
     // rodando ou tarefa em andamento; parado, não escreve nada.
@@ -517,7 +602,9 @@ export const register: Register = (on, options) => {
         await update($, agents, all =>
           all.map(a =>
             a.status === 'running' && ended.has(a.id)
-              ? { ...a, status: ended.get(a.id) === 'completed' ? ('done' as const) : ('failed' as const), endedAt: t }
+              ? ended.get(a.id) === 'completed'
+                ? { ...a, status: 'done' as const, endedAt: t }
+                : { ...a, status: 'failed' as const, endedAt: t, reason: a.reason ?? (ended.get(a.id) === 'killed' ? 'stopped' : 'failed') }
               : a,
           ),
         )
@@ -561,9 +648,45 @@ export const register: Register = (on, options) => {
     return { text: want ? L.barOn : L.barOff }
   })
 
+  on('command.run', { command: 'crew-add' }, async ($, e) => {
+    const job = parseAdd(e.args, await read($, lastPrompt))
+    if (typeof job === 'string') return { text: job }
+    const next = [...(await read($, jobs)).filter(j => j.name.toLowerCase() !== job.name.toLowerCase()), job]
+    await update($, jobs, () => next)
+    await $.store.set('jobs', next).catch(() => {})
+    return { text: `Saved "${job.name}" (${job.changes ? '◆ changes files, so it lists the changes and asks first' : '◇ reads only'}). It's in the Agents panel's Quick run, or /crew-run ${job.name}.` }
+  })
+
+  on('command.run', { command: 'crew-remove' }, async ($, e) => {
+    const name = e.args.trim().toLowerCase()
+    const own = await read($, jobs)
+    const hit = own.find(j => j.name.toLowerCase() === name)
+    if (!hit) {
+      const isDefault = allJobs([]).some(j => j.name.toLowerCase() === name)
+      return { text: isDefault ? `"${e.args.trim()}" is a built-in job; only jobs you saved can be removed.` : `No saved job named "${e.args.trim()}". Yours: ${own.map(j => j.name).join(', ') || 'none yet'}.` }
+    }
+    const next = own.filter(j => j !== hit)
+    await update($, jobs, () => next)
+    await $.store.set('jobs', next).catch(() => {})
+    return { text: `Removed "${hit.name}".` }
+  })
+
+  on('command.run', { command: 'crew-run' }, async ($, e) => {
+    const own = await read($, jobs)
+    if (!e.args.trim()) {
+      return { text: ['Quick-run jobs (◇ reads only, ◆ changes files after your OK):', ...allJobs(own).map(j => `${j.changes ? '◆' : '◇'} ${j.name}: ${j.blurb}`), 'Run one with /crew-run Name.'].join('\n') }
+    }
+    const job = findJob(own, e.args)
+    if (!job) return { text: `No job named "${e.args.trim()}". /crew-run lists them.` }
+    void $.prompt.submit({ text: jobPrompt(job) })
+    return { text: `Running "${job.name}".` }
+  })
+
   on('command.run', { command: 'crew-clear' }, async $ => {
     await update($, tasks, () => [])
     await update($, agents, () => [])
+    await update($, openRows, () => [])
+    await update($, round, () => null)
     return { text: L.cleared }
   })
 
@@ -580,6 +703,7 @@ export const register: Register = (on, options) => {
           role: council ? STAGE_ROLE[council.stage] : roleOf(e.subagentType, e.description),
           ...(council ? { stage: council.stage } : {}),
           ...(council?.persona ? { persona: council.persona } : {}),
+          ...(e.prompt ? { prompt: clip(e.prompt, 600) } : {}),
           model: r.model,
           status: 'running',
           startedAt: Date.now(),
@@ -599,6 +723,11 @@ export const register: Register = (on, options) => {
   // zera já no envio do prompt: o app marca "trabalhando" antes do turn.start,
   // e sem isso a faixa mostraria por um instante os 100% do turno anterior
   on('prompt.submit', async ($, e, next) => {
+    // what you typed (not a command, not a plugin's prompt), for /crew-add Name
+    const origin = (e as any).origin?.kind
+    if (origin !== 'plugin' && !e.isMeta && !e.command && e.text && !e.text.trimStart().startsWith('/')) {
+      await update($, lastPrompt, () => e.text.slice(0, 4000)).catch(() => {})
+    }
     await update($, main, () => ({ activity: L.thinking, steps: 0, tools: 0, working: true, done: false })).catch(
       () => {},
     )
@@ -647,8 +776,11 @@ export const register: Register = (on, options) => {
     if (e.agentId) {
       const id = e.agentId
       const failed = e.reason === 'error' || e.reason === 'aborted' || e.reason === 'refusal'
+      const lastLine = String(e.answer ?? '').trim().split('\n').pop() ?? ''
+      const reason = e.reason === 'aborted' ? 'stopped before it finished' : e.reason === 'refusal' ? 'refused the task' : `error${lastLine ? `: ${clip(lastLine, 160)}` : ''}`
       await patchAgent($, id, a => ({
         ...a,
+        ...(failed ? { reason } : {}),
         status: failed ? 'failed' : 'done',
         endedAt: Date.now(),
         tasks: failed ? a.tasks : a.tasks.map(t => ({ ...t, status: 'completed' as const })),
@@ -669,8 +801,19 @@ export const register: Register = (on, options) => {
 
   on('tool.call', async ($, e, next) => {
     const tool = String(e.tool)
-    const input = (e as any).input
+    // the tool's arguments sit beside `tool` on this build (`e.command`); older ones nested them under `input`
+    const input = (e as any).input ?? e
     const agentId = e.agentId
+
+    // a council round launching: its number and mode name the stage strip
+    if (!agentId && tool === 'Workflow') {
+      const a = input?.args
+      if (a && typeof a === 'object' && a.repo && Array.isArray(a.personas)) {
+        const project = String(a.repo).replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? ''
+        const r: PcRound = { round: Number(a.round) || 0, mode: String(a.mode ?? 'full'), project, startedAt: Date.now() }
+        await update($, round, () => r).catch(() => {})
+      }
+    }
     const isCodexBash = !agentId && tool === 'Bash' && /codex/i.test(String(input?.command ?? ''))
 
     if (isCodexBash) {
@@ -691,7 +834,13 @@ export const register: Register = (on, options) => {
       }).catch(() => {})
     }
     if (agentId) {
-      await patchAgent($, agentId, a => ({ ...a, tools: a.tools + 1, phase: activityOf(tool, input) })).catch(() => {})
+      const used = recentOf(tool, input)
+      await patchAgent($, agentId, a => ({
+        ...a,
+        tools: a.tools + 1,
+        phase: activityOf(tool, input),
+        recent: [...(a.recent ?? []), used].slice(-RECENT),
+      })).catch(() => {})
     } else {
       const activity = activityOf(tool, input)
       const role = toolRole(tool, input)
@@ -746,8 +895,8 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (!(await read($, bandOn))) return next(e)
     // a council round in progress has the band: its own shows the round
-    const round = (await $.state.get(councilBand)).value
-    if (round && !round.isFinished && !(await $.state.get(councilBandHidden)).value) return next(e)
+    const councilRound = (await $.state.get(councilBand as never)).value as CouncilBand
+    if (councilRound && !councilRound.isFinished && !(await $.state.get(councilBandHidden as never)).value) return next(e)
     if (e.props.hasSurvey) return next(e)
     const t = Date.now()
     const view = await bandView($, e.props.isWorking, t)
@@ -886,7 +1035,7 @@ export const register: Register = (on, options) => {
     const took = fmtTime((a.endedAt ?? clock) - a.startedAt)
     const stats = a.role === 'codex' && a.steps === 0
       ? took
-      : `ctx ${ctxPct}%  ${fmtTokens(a.tokens)} ${fmtCost(a.costUsd)} ${took}`
+      : `${ctxPct}% of ${windowLabel(a.model)}  ${fmtTokens(a.tokens)} ${fmtCost(a.costUsd)} ${took}`
     const mark = a.status === 'running' ? '●' : a.status === 'done' ? '✓' : '✗'
     const sub = `${a.role === 'codex' ? 'Codex' : shortModel(a.model)}${effortLabel(a.effort)}`
     return { progress, phase, stats, mark, sub }
@@ -948,6 +1097,50 @@ export const register: Register = (on, options) => {
       </Box>
     )
 
+    const opened = await read($, openRows)
+    const toggleRow = (id: string) => () =>
+      update($, openRows, list => (list.includes(id) ? list.filter(x => x !== id) : [...list, id].slice(-20)))
+
+    // a row opened: the task it was given, its steps one per line, its last tools, why it failed
+    const details = (a: PcAgent) => {
+      const steps = a.tasks.slice(0, 5)
+      const more = a.tasks.length - steps.length
+      return (
+        <Box key={`d-${a.id}`} flexDirection="column" marginTop={1}>
+          {a.prompt && (
+            <Box flexDirection="column">
+              <Text dimColor>Task</Text>
+              <Text>{clip(a.prompt, isTerm ? 160 : 240)}</Text>
+            </Box>
+          )}
+          {steps.length > 0 && (
+            <Box flexDirection="column">
+              <Text dimColor>Steps</Text>
+              {steps.map(t => (
+                <Box key={`st-${a.id}-${t.id}`} flexDirection="row" gap={1}>
+                  <Text color={t.status === 'completed' ? '#3FB27F' : t.status === 'in_progress' ? CLAY : undefined} dimColor={t.status === 'pending'}>
+                    {t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '●' : '○'}
+                  </Text>
+                  <Text wrap="truncate" dimColor={t.status === 'pending'}>{t.status === 'in_progress' ? t.activeForm || t.subject : t.subject}</Text>
+                </Box>
+              ))}
+              {more > 0 && <Text dimColor>{`+${more} more`}</Text>}
+            </Box>
+          )}
+          {(a.recent?.length ?? 0) > 0 && (
+            <Box flexDirection="column">
+              <Text dimColor>Last tools</Text>
+              {a.recent!.slice().reverse().map((u, i) => (
+                <Text key={`u-${a.id}-${i}`} dimColor wrap="truncate">{u}</Text>
+              ))}
+            </Box>
+          )}
+          {a.status === 'failed' && <Text color={ERROR} wrap="truncate">{`Why it stopped: ${a.reason ?? 'failed'}`}</Text>}
+          {!a.prompt && !steps.length && !a.recent?.length && a.status !== 'failed' && <Text dimColor>Nothing more to show yet.</Text>}
+        </Box>
+      )
+    }
+
     const row = (a: PcAgent) => {
       const info = ROLES[a.role]
       // a council persona keeps its own colour; the gear still says the stage
@@ -960,6 +1153,13 @@ export const register: Register = (on, options) => {
       const done = a.status !== 'running'
       const barColor = done ? fade(tint) : tint
       const barFrame = done ? 0 : f
+      const isOpen = opened.includes(a.id)
+      // the row's title opens it: a Button around the text, so the text stays findable
+      const title = (
+        <Button key={`open-${a.id}`} plain onPress={toggleRow(a.id)}>
+          <Text bold wrap="truncate">{`${isOpen ? '▾' : '▸'} ${a.description}`}</Text>
+        </Button>
+      )
 
       if (isTerm) {
         // o personagem numa linha, em pixels de quadrante e na cor do papel,
@@ -982,7 +1182,7 @@ export const register: Register = (on, options) => {
               <Box flexDirection="row" justifyContent="space-between" gap={1}>
                 <Box flexDirection="row" gap={1} flexShrink={1} minWidth={0} overflow="hidden">
                   <Text color={done ? fade(tint) : tint}>{ROLE_SYMBOL[a.role]}</Text>
-                  <Text bold wrap="truncate">{a.description}</Text>
+                  {title}
                 </Box>
                 <Text color={markColor}>{mark}</Text>
               </Box>
@@ -997,6 +1197,7 @@ export const register: Register = (on, options) => {
               {barCols >= BAR_MIN && (
                 <Raster {...barRaster({ key: `b-${a.id}`, columns: barCols, ratio, color: barColor, frame: barFrame, still: done })} />
               )}
+              {isOpen && details(a)}
             </Box>
           </Box>
         )
@@ -1011,7 +1212,9 @@ export const register: Register = (on, options) => {
           </Box>
           <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
             <Box flexDirection="row" justifyContent="space-between" gap={1}>
-              <Text bold wrap="truncate">{a.description}</Text>
+              <Box flexShrink={1} minWidth={0} overflow="hidden">
+                {title}
+              </Box>
               <Text color={markColor}>{mark}</Text>
             </Box>
             <Box flexDirection="row" gap={1}>
@@ -1025,19 +1228,121 @@ export const register: Register = (on, options) => {
             <Box marginTop={1} overflow="hidden">
               <Svg source={barSvg({ ratio, color: barColor, frame: barFrame, still: done })} alt={L.altProgress(a.description)} height={6} />
             </Box>
+            {isOpen && details(a)}
           </Box>
         </Box>
       )
     }
 
+    // ── the council round's stage strip ──
+    const r = await read($, round)
+    const roundCrew = r ? crew.filter(a => a.startedAt >= r.startedAt - 60_000) : crew
+    const strip = stripOf(roundCrew)
+    const stripBlock = strip && (
+      <Box key="strip" flexDirection="column">
+        <Box flexDirection="row" justifyContent="space-between" gap={1}>
+          <Text bold wrap="truncate">{r ? `Council r${r.round} · ${r.mode}${r.project ? ` · ${r.project}` : ''}` : 'Council round'}</Text>
+          {strip.every(s => s.state !== 'active') && <Text color="#3FB27F">done</Text>}
+        </Box>
+        <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
+          {strip.map(s => (
+            <Text
+              key={`strip-${s.label}`}
+              color={s.state === 'active' ? CLAY : s.state === 'done' ? '#3FB27F' : undefined}
+              bold={s.state === 'active'}
+              dimColor={s.state === 'pending'}
+            >
+              {`${s.state === 'done' ? '✓' : s.state === 'active' ? '●' : '○'} ${s.text}`}
+            </Text>
+          ))}
+        </Box>
+      </Box>
+    )
+
+    // ── totals: per model, done and failed, the longest finished ──
+    const failedN = finished.filter(a => a.status === 'failed').length
+    const doneN = finished.length - failedN
+    const agentsValue = [running.length ? `${running.length}●` : '', `${doneN}✓`, failedN ? `${failedN}✗` : ''].filter(Boolean).join(' ')
+    const byModel = new Map<string, { cost: number; tokens: number }>()
+    for (const a of crew) {
+      if (a.role === 'codex') continue
+      const m = shortModel(a.model)
+      const had = byModel.get(m) ?? { cost: 0, tokens: 0 }
+      byModel.set(m, { cost: had.cost + a.costUsd, tokens: had.tokens + a.tokens })
+    }
+    const models = [...byModel.entries()].filter(([, v]) => v.tokens > 0).sort((x, y) => y[1].cost - x[1].cost)
+    const longest = finished.reduce<PcAgent | undefined>(
+      (best, a) => ((a.endedAt ?? a.startedAt) - a.startedAt > (best ? (best.endedAt ?? best.startedAt) - best.startedAt : -1) ? a : best),
+      undefined,
+    )
+
+    // ── quick run: open by itself while nobody works, one folded line while they do ──
+    const own = await read($, jobs)
+    const list = allJobs(own)
+    const q = await read($, quick)
+    const shownJob = await read($, openJob)
+    const quickOpen = q === 'open' || (q === 'auto' && running.length === 0)
+    const runJob = (job: PcJob) => async () => {
+      await update($, quick, () => 'auto')
+      $.ui.toast(`Running "${job.name}"`)
+      void $.prompt.submit({ text: jobPrompt(job) })
+    }
+    const jobRow = (job: PcJob) => {
+      const showing = shownJob === job.name
+      return (
+        <Box key={`job-${job.name}`} flexDirection="column">
+          <Box flexDirection="row" gap={1} alignItems="center">
+            <Text color={job.changes ? 'warning' : 'suggestion'}>{job.changes ? '◆' : '◇'}</Text>
+            <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
+              <Button key={`jobname-${job.name}`} plain onPress={() => update($, openJob, v => (v === job.name ? '' : job.name))}>
+                <Text wrap="truncate">{`${showing ? '▾ ' : ''}${job.name}`}</Text>
+              </Button>
+              {!isTerm && <Text dimColor wrap="truncate">{job.blurb}</Text>}
+            </Box>
+            <Button key={`run-${job.name}`} label="Run" onPress={runJob(job)} />
+          </Box>
+          {showing && (
+            <Box paddingLeft={2}>
+              <Text dimColor italic>{`"${jobPrompt(job)}"`}</Text>
+            </Box>
+          )}
+        </Box>
+      )
+    }
+    const quickBlock = (
+      <Box key="quick" flexDirection="column">
+        <Box flexDirection="row" justifyContent="space-between" gap={1}>
+          <Button
+            key="fold-quick"
+            plain
+            label={`${quickOpen ? '▾' : '▸'} Quick run (${list.length})`}
+            onPress={() => update($, quick, () => (quickOpen ? 'closed' : 'open'))}
+          />
+          {quickOpen && !isTerm && <Text dimColor>/crew-add Name | prompt</Text>}
+        </Box>
+        {quickOpen && list.map(jobRow)}
+        {quickOpen && <Text dimColor wrap="truncate">◇ reads only · ◆ changes files after your OK</Text>}
+      </Box>
+    )
+
     return (
       <Box flexDirection="column" gap={1}>
+        {stripBlock}
         <Text bold>{kit}</Text>
-        <Box flexDirection="row" gap={1}>
+        <Box flexDirection="row" gap={1} flexWrap="wrap">
           {metric(L.cost, fmtCost(cost), 'm-cost')}
           {metric(L.tokens, fmtTokens(tokensTotal), 'm-tok')}
           {metric(L.time, fmtTime(elapsed), 'm-time')}
+          {crew.length > 0 && metric('Agents', agentsValue, 'm-agents')}
         </Box>
+        {(models.length > 1 || longest) && (
+          <Box flexDirection="column">
+            {models.length > 1 && models.map(([m, v]) => (
+              <Text key={`model-${m}`} dimColor wrap="truncate">{`${m} ${fmtCost(v.cost)} · ${fmtTokens(v.tokens)}`}</Text>
+            ))}
+            {longest && <Text dimColor wrap="truncate">{`Longest finished: ${longest.description}, ${fmtTime((longest.endedAt ?? longest.startedAt) - longest.startedAt)}`}</Text>}
+          </Box>
+        )}
         <Text dimColor>{L.running(running.length)}</Text>
         {running.length === 0 && <Text dimColor>{L.nobodyWorking}</Text>}
         {running.map(row)}
@@ -1045,11 +1350,12 @@ export const register: Register = (on, options) => {
           <Button
             key="toggle-done"
             plain
-            label={`${expanded ? '▾' : '▸'} ${L.finished(finished.length)}`}
+            label={`${expanded ? '▾' : '▸'} ${L.finished(finished.length)}${failedN ? ` (${failedN} failed)` : ''}`}
             onPress={() => update($, showDone, v => !v)}
           />
         )}
         {expanded && finished.slice().reverse().map(row)}
+        {quickBlock}
       </Box>
     )
   })
