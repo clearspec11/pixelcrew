@@ -183,6 +183,36 @@ test('while a turn runs no job row offers Run, and /crew-run says to wait', EN, 
   await after.unmount()
 })
 
+test('a job prompt a hook dropped starts no turn: Run is back, the band is idle, nothing says running', EN, async ($, on) => {
+  mock.store(on, {})
+  on('command.register', () => ({ value: { command: 'x' } }))
+  on('ui.toast', () => ({ value: undefined }))
+  // a settings hook or another plugin refuses the prompt: no turn starts, so no turn.complete ever comes
+  on('prompt.submit', async () => ({ drop: 'blocked by a hook' }))
+  // an idle band hides itself: what is beneath it (here, an empty row) draws instead
+  ;(on as any)('ui.render', { component: 'AbovePrompt' }, async ($: any, e: any) => {
+    const { Box } = $.ui.resolve(e)
+    return <Box />
+  })
+  const idle = async () => {
+    for (const surface of ['terminal', 'desktop'] as const) {
+      const ui = await mountPane($, surface)
+      for (const job of JOBS) expect(await ui.find({ key: `run-${job.name}` })).toBeDefined()
+      expect(await ui.find({ text: 'Run comes back when this turn ends' })).toBeUndefined()
+      expect(await ui.find({ text: /running|queued/ })).toBeUndefined()
+      await ui.unmount()
+      const band = await $.ui.mount({ plugin: 'pixel-crew', surface, component: 'AbovePrompt', props: { isWorking: false, hasSurvey: false, maxRows: 10, bodyColumns: 100, scroll: { offset: 0, bodyRows: 10 }, view: {} } as any })
+      expect(await band.find({ text: /Thinking|\d+%/ })).toBeUndefined()
+      await band.unmount()
+    }
+  }
+  await $.prompt.submit({ text: jobPrompt(DISK) } as any)
+  await idle()
+  // a dropped job prompt typed over a turn is not left queued either
+  await $.prompt.submit({ text: jobPrompt(DOCKER), turnId: 't9' } as any)
+  await idle()
+})
+
 test('/crew-add takes Name | prompt, or the last prompt you typed', () => {
   const job = parseAdd('Restart Plex | restart the plex container and show its logs', '')
   expect(job).toEqual({ name: 'Restart Plex', blurb: 'restart the plex container and show i…', prompt: 'restart the plex container and show its logs', changes: true, own: true })

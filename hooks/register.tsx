@@ -839,20 +839,36 @@ export const register: Register = (on, options) => {
     if (e.command) return next(e)
     // a quick-run job's prompt: the band's mascot puts its hat on, and the turn's end keeps its result
     const job = e.text ? jobOfPrompt(await read($, jobs).catch(() => [] as PcJob[]), e.text) : undefined
+    // what the band and the jobs held before this prompt: put back if the prompt never enters
+    const was = {
+      main: await read($, main).catch(() => IDLE),
+      fx: await read($, fx).catch(() => CALM),
+      activeJob: await read($, activeJob).catch(() => null as PcActiveJob | null),
+      pendingJob: await read($, pendingJob).catch(() => null as PcPendingJob | null),
+    }
     // typed over a running turn, the prompt waits behind it: the band and the job's hat stay with that
     // turn, and a job's prompt waits as the pending job until its own turn starts
-    const overTurn = e.turnId !== undefined || (await read($, main).catch(() => IDLE)).working
+    const overTurn = e.turnId !== undefined || was.main.working
     if (overTurn) {
       if (job) await update($, pendingJob, () => ({ name: job.name, hat: hatOf(job) })).catch(() => {})
-      return next(e)
+    } else {
+      await update($, pendingJob, () => null).catch(() => {})
+      await update($, activeJob, () => (job ? { name: job.name, hat: hatOf(job), startedAt: Date.now() } : null)).catch(() => {})
+      await update($, main, () => ({ activity: L.thinking, steps: 0, tools: 0, working: true, done: false })).catch(
+        () => {},
+      )
+      await update($, fx, () => CALM).catch(() => {})
     }
-    await update($, pendingJob, () => null).catch(() => {})
-    await update($, activeJob, () => (job ? { name: job.name, hat: hatOf(job), startedAt: Date.now() } : null)).catch(() => {})
-    await update($, main, () => ({ activity: L.thinking, steps: 0, tools: 0, working: true, done: false })).catch(
-      () => {},
-    )
-    await update($, fx, () => CALM).catch(() => {})
-    return next(e)
+    const r = await next(e)
+    // dropped (a hook or a settings hook refused it), the prompt starts no turn, so no turn.complete
+    // would ever free the band, the job's "running" or the Run buttons: put everything back
+    if (r.drop !== undefined) {
+      await update($, main, () => was.main).catch(() => {})
+      await update($, fx, () => was.fx).catch(() => {})
+      await update($, activeJob, () => was.activeJob).catch(() => {})
+      await update($, pendingJob, () => was.pendingJob).catch(() => {})
+    }
+    return r
   })
 
   on('turn.start', async ($, e, next) => {
