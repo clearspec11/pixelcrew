@@ -496,6 +496,8 @@ type BandView = {
 
 // a quick-run job pressed or /crew-run while Claude works would only queue behind the turn
 const BUSY = 'Claude is busy; try again when this turn ends.'
+// how long /crew-run waits after answering before it submits the job's prompt
+const CREW_RUN_DELAY_MS = 150
 async function isBusy($: EngineInterface): Promise<boolean> {
   return (await read($, main).catch(() => IDLE)).working || (await read($, activeJob).catch(() => null)) !== null
 }
@@ -773,7 +775,12 @@ export const register: Register = (on, options) => {
     const job = findJob(own, e.args)
     if (!job) return { text: `No job named "${e.args.trim()}". /crew-run lists them.` }
     if (await isBusy($)) return { text: BUSY }
-    void $.prompt.submit({ text: jobPrompt(job) })
+    // a prompt submitted from inside this hook would wait on the turn the hook is holding (the
+    // engine refuses it), so it goes a moment after the command has answered
+    const text = jobPrompt(job)
+    $.clock.after(CREW_RUN_DELAY_MS, () => {
+      void $.prompt.submit({ text }).catch(() => $.ui.toast(`Couldn't start "${job.name}"`))
+    })
     return { text: `Running "${job.name}".` }
   })
 
@@ -879,13 +886,16 @@ export const register: Register = (on, options) => {
     await update($, main, () => ({ activity: L.thinking, steps: 0, tools: 0, working: true, done: false })).catch(
       () => {},
     )
-    // the queued job's turn begins: it becomes the active job (an empty text is a continuation; keep waiting)
-    const waiting = await read($, pendingJob).catch(() => null as PcPendingJob | null)
-    if (waiting && e.text) {
-      await update($, pendingJob, () => null).catch(() => {})
+    // A job's turn begins: it becomes the active job here, from the turn's own text. This is the one
+    // place every road meets: a job typed or queued (prompt.submit saw it), and one this plugin
+    // submitted itself (Run, /crew-run), whose prompt never passes through this plugin's own
+    // prompt.submit hook. An empty text is a continuation, and a turn of other text leaves a queued
+    // job waiting for its own.
+    if (e.text) {
       const job = jobOfPrompt(await read($, jobs).catch(() => [] as PcJob[]), e.text)
-      if (job?.name === waiting.name) {
-        await update($, activeJob, () => ({ ...waiting, startedAt: Date.now() })).catch(() => {})
+      if (job) {
+        await update($, activeJob, () => ({ name: job.name, hat: hatOf(job), startedAt: Date.now() })).catch(() => {})
+        await update($, pendingJob, p => (p?.name === job.name ? null : p)).catch(() => {})
       }
     }
     return next(e)

@@ -82,11 +82,15 @@ test('a quick-run turn: running while it works, then its result and Run again, k
 const DISK = JOBS.find(j => j.name === 'Disk space on C:')!
 const DOCKER = JOBS.find(j => j.name === 'Docker health')!
 const ended = (turnId: string, answer: string) => ({ answer, durationMs: 10, isAborted: false, turnId, reason: 'completed' }) as any
-const engine = (on: any) => {
+const engine = (on: any, sent: string[] = []) => {
   mock.store(on, {})
   on('command.register', () => ({ value: { command: 'x' } }))
   on('ui.toast', () => ({ value: undefined }))
-  on('prompt.submit', async (_$: any, e: any) => ({ text: e.text }))
+  // the engine beneath: it records what reached it and runs it
+  on('prompt.submit', async (_$: any, e: any) => {
+    sent.push(e.text)
+    return { text: e.text }
+  })
   on('turn.start', async (_$: any, e: any) => ({ turnId: e.turnId }))
   on('turn.complete', async () => ({ text: '' }))
 }
@@ -97,6 +101,34 @@ const rowOf = async ($: any, job: string) => {
   await ui.unmount()
   return row
 }
+
+test('Run in the panel: the job becomes active when its turn starts, though its own submit never reaches this plugin', EN, async ($, on) => {
+  const sent: string[] = []
+  engine(on, sent)
+  const ui = await mountPane($, 'desktop')
+  await ui.press({ key: `run-${DOCKER.name}` })
+  await ui.unmount()
+  expect(sent).toEqual([jobPrompt(DOCKER)])
+  // the engine runs it as a turn of its own; the plugin may never have seen the submit
+  await $.turn.start({ text: sent[0], turnId: 't1' } as any)
+  expect(await rowOf($, DOCKER.name)).toContain('● running')
+  await $.turn.complete(ended('t1', 'Result: 9 containers up, 0 unhealthy'))
+  expect(await rowOf($, DOCKER.name)).toBe(`◇Docker health✓ just now9 containers up, 0 unhealthyRun again`)
+  // the engine's own frame around a plugin's prompt still names the job
+  await $.turn.start({ text: `The pixel-crew plugin sent a message:\n${jobPrompt(DISK)}`, turnId: 't2' } as any)
+  expect(await rowOf($, DISK.name)).toContain('● running')
+})
+
+test('/crew-run answers first and submits the job a moment later, outside the command hook', EN, async ($, on) => {
+  const sent: string[] = []
+  engine(on, sent)
+  const clock = mock.clock(on)
+  const r: any = await $.command.run({ command: 'crew-run', args: 'docker' } as any)
+  expect(r.text).toBe('Running "Docker health".')
+  expect(sent).toEqual([])
+  await clock.advance(200)
+  expect(sent).toEqual([jobPrompt(DOCKER)])
+})
 
 test('a prompt typed over a job\'s turn leaves the job its hat and its result', EN, async ($, on) => {
   engine(on)
