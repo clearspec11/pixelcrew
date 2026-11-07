@@ -1184,5 +1184,9 @@ test('a long round keeps its oldest agent on the panel while it still runs', EN,
     expect(await ui.find({ text: '1● 44✓' })).toBeDefined()
     expect(await ui.find({ text: '+5 earlier agents folded into the totals' })).toBeDefined()
     await ui.unmount()
+    // the band's crew button counts the same 45, not the 40 rows left
+    const band = await $.ui.mount({ plugin: 'pixel-crew', surface, component: 'AbovePrompt', props: { ...BAND, isWorking: false } })
+    expect((await band.find({ key: 'crew' }))?.props.label).toBe('×45')
+    await band.unmount()
   }
 })

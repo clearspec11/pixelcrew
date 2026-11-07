@@ -508,6 +508,8 @@ async function isBusy($: EngineInterface): Promise<boolean> {
 async function bandView($: EngineInterface, appWorking: boolean, t = Date.now()): Promise<BandView | null> {
   const list = await read($, tasks)
   const crew = await read($, agents)
+  // the ×N button counts the agents the panel's totals count: its rows and the ones folded off them
+  const gone = await read($, retired)
   const stored = await read($, main)
   const effects = await read($, fx)
   // o app já diz "trabalhando" mas o estado ainda é do turno que acabou: é um turno novo
@@ -566,7 +568,7 @@ async function bandView($: EngineInterface, appWorking: boolean, t = Date.now())
           ? L.waiting(running)
           : active?.activeForm || active?.subject || L.tasks
 
-  return { title, target, count, pose, delegating, shaking, role: m.role, crew: crew.length }
+  return { title, target, count, pose, delegating, shaking, role: m.role, crew: crew.length + gone.n }
 }
 
 /** The band in one line: the mood or role symbol, what is happening, progress and count. */
