@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { PcActiveJob, PcAgent, PcFx, PcJob, PcMain, PcResult, PcRole, PcRound, PcSkin, PcTask } from '../types'
+import type { PcActiveJob, PcAgent, PcFx, PcJob, PcMain, PcPendingJob, PcResult, PcRole, PcRound, PcSkin, PcTask } from '../types'
 import { ago, allJobs, findJob, hatOf, jobOfPrompt, jobPrompt, parseAdd, resultLine } from './quickrun'
 import { ALERT, bandRaster, barRaster, barSvg, CLAY, fade, mascotSvg, MAX_RASTER_COLUMNS, ROLES, roleLabel, roleSymbol, spriteRaster, spriteSvg } from './art'
 
@@ -95,6 +95,8 @@ const round = atom({ plugin: 'pixel-crew', key: 'round' } as const, null)
 const lastPrompt = atom({ plugin: 'pixel-crew', key: 'lastPrompt' } as const, '')
 const skin = atom({ plugin: 'pixel-crew', key: 'skin' } as const, 'crew')
 const activeJob = atom({ plugin: 'pixel-crew', key: 'activeJob' } as const, null)
+// a job's prompt typed while a turn ran: it waits its turn, and turn.start makes it the active job
+const pendingJob = atom({ plugin: 'pixel-crew', key: 'pendingJob' } as const, null)
 const results = atom({ plugin: 'pixel-crew', key: 'results' } as const, {})
 
 /** `/crew-skin party|crew`, or nothing to switch: the look asked for. */
@@ -429,6 +431,12 @@ type BandView = {
   crew: number
 }
 
+// a quick-run job pressed or /crew-run while Claude works would only queue behind the turn
+const BUSY = 'Claude is busy; try again when this turn ends.'
+async function isBusy($: EngineInterface): Promise<boolean> {
+  return (await read($, main).catch(() => IDLE)).working || (await read($, activeJob).catch(() => null)) !== null
+}
+
 /**
  * What the band shows right now, or null when it has nothing to show. The
  * band draws it; the status line (for the mobile app, which draws no band)
@@ -699,6 +707,7 @@ export const register: Register = (on, options) => {
     }
     const job = findJob(own, e.args)
     if (!job) return { text: `No job named "${e.args.trim()}". /crew-run lists them.` }
+    if (await isBusy($)) return { text: BUSY }
     void $.prompt.submit({ text: jobPrompt(job) })
     return { text: `Running "${job.name}".` }
   })
@@ -761,8 +770,19 @@ export const register: Register = (on, options) => {
     if (origin !== 'plugin' && !e.isMeta && !e.command && e.text && !e.text.trimStart().startsWith('/')) {
       await update($, lastPrompt, () => e.text.slice(0, 4000)).catch(() => {})
     }
+    // a slash command is not a turn by itself (one that asks the model gets its reset at turn.start),
+    // so it must not mark the band working and take the Run buttons away
+    if (e.command) return next(e)
     // a quick-run job's prompt: the band's mascot puts its hat on, and the turn's end keeps its result
     const job = e.text ? jobOfPrompt(await read($, jobs).catch(() => [] as PcJob[]), e.text) : undefined
+    // typed over a running turn, the prompt waits behind it: the band and the job's hat stay with that
+    // turn, and a job's prompt waits as the pending job until its own turn starts
+    const overTurn = e.turnId !== undefined || (await read($, main).catch(() => IDLE)).working
+    if (overTurn) {
+      if (job) await update($, pendingJob, () => ({ name: job.name, hat: hatOf(job) })).catch(() => {})
+      return next(e)
+    }
+    await update($, pendingJob, () => null).catch(() => {})
     await update($, activeJob, () => (job ? { name: job.name, hat: hatOf(job), startedAt: Date.now() } : null)).catch(() => {})
     await update($, main, () => ({ activity: L.thinking, steps: 0, tools: 0, working: true, done: false })).catch(
       () => {},
@@ -772,9 +792,20 @@ export const register: Register = (on, options) => {
   })
 
   on('turn.start', async ($, e, next) => {
+    // a subagent's turn starting is not a new turn of the band's
+    if (e.agentId !== undefined) return next(e)
     await update($, main, () => ({ activity: L.thinking, steps: 0, tools: 0, working: true, done: false })).catch(
       () => {},
     )
+    // the queued job's turn begins: it becomes the active job (an empty text is a continuation; keep waiting)
+    const waiting = await read($, pendingJob).catch(() => null as PcPendingJob | null)
+    if (waiting && e.text) {
+      await update($, pendingJob, () => null).catch(() => {})
+      const job = jobOfPrompt(await read($, jobs).catch(() => [] as PcJob[]), e.text)
+      if (job?.name === waiting.name) {
+        await update($, activeJob, () => ({ ...waiting, startedAt: Date.now() })).catch(() => {})
+      }
+    }
     return next(e)
   })
 
@@ -1334,8 +1365,15 @@ export const register: Register = (on, options) => {
     const shownJob = await read($, openJob)
     const lastRuns = await read($, results)
     const live = await read($, activeJob)
+    const queued = await read($, pendingJob)
+    // while Claude works, Run would only queue behind the turn: no Run buttons until it ends
+    const busy = await isBusy($)
     const quickOpen = q === 'open' || (q === 'auto' && running.length === 0)
     const runJob = (job: PcJob) => async () => {
+      if (await isBusy($)) {
+        $.ui.toast(BUSY)
+        return
+      }
       await update($, quick, () => 'auto')
       $.ui.toast(`Running "${job.name}"`)
       void $.prompt.submit({ text: jobPrompt(job) })
@@ -1344,10 +1382,14 @@ export const register: Register = (on, options) => {
       const showing = shownJob === job.name
       // the run in flight, else the last one: when, how it went, its one-line result
       const isLive = live?.name === job.name
+      // a stale wait (its prompt went into the turn it was typed over) shows nothing once that turn ends
+      const isQueued = !isLive && busy && queued?.name === job.name
       const last = lastRuns[job.name]
       const status = isLive
         ? { text: '● running', color: CLAY }
-        : last
+        : isQueued
+          ? { text: '○ queued', color: 'suggestion' }
+          : last
           ? { text: `${last.ok ? '✓' : '✗'} ${ago(last.at, clock)}`, color: last.ok ? '#3FB27F' : ERROR }
           : null
       return (
@@ -1369,7 +1411,7 @@ export const register: Register = (on, options) => {
                 !isTerm && <Text dimColor wrap="truncate">{job.blurb}</Text>
               )}
             </Box>
-            {!isLive && <Button key={`run-${job.name}`} label={last ? 'Run again' : 'Run'} onPress={runJob(job)} />}
+            {!busy && <Button key={`run-${job.name}`} label={last ? 'Run again' : 'Run'} onPress={runJob(job)} />}
           </Box>
           {showing && (
             <Box paddingLeft={2}>
@@ -1392,6 +1434,7 @@ export const register: Register = (on, options) => {
         </Box>
         {quickOpen && list.map(jobRow)}
         {quickOpen && <Text dimColor wrap="truncate">◇ reads only · ◆ changes files after your OK</Text>}
+        {quickOpen && busy && <Text key="quick-busy" dimColor wrap="truncate">Run comes back when this turn ends</Text>}
       </Box>
     )
 

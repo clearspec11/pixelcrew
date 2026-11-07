@@ -77,6 +77,9 @@ export type PcResult = { at: number; ok: boolean; line: string }
 /** The quick-run job whose turn is running now. */
 export type PcActiveJob = { name: string; hat: PcHat; startedAt: number }
 
+/** A quick-run job typed while a turn ran: it waits behind that turn until its own starts. */
+export type PcPendingJob = { name: string; hat: PcHat }
+
 /** The council round in flight, from the Workflow call that launched it. */
 export type PcRound = { round: number; mode: string; project: string; startedAt: number }
 
@@ -132,6 +135,8 @@ declare module 'claude-code' {
       skin: PcSkin
       /** the quick-run job running now, or null */
       activeJob: PcActiveJob | null
+      /** a job's prompt queued behind the running turn, or null; turn.start makes it the active job */
+      pendingJob: PcPendingJob | null
       /** each quick-run job's last result, by job name (kept in $.store too) */
       results: Record<string, PcResult>
     }

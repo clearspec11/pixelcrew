@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { activityOf, parseSkin, recentOf, statusLine, stripOf, windowLabel } from '../hooks/register'
+import { activityOf, parseSkin, recentOf, resetGlide, statusLine, stripOf, windowLabel } from '../hooks/register'
 import { ago, allJobs, ASK_FIRST, findJob, hatOf, jobOfPrompt, jobPrompt, JOBS, parseAdd, RESULT_ASK, resultLine } from '../hooks/quickrun'
 import { mascotSvg, PARTY, spriteSvg } from '../hooks/art'
 import { strings } from '../hooks/i18n'
@@ -75,6 +75,112 @@ test('a quick-run turn: running while it works, then its result and Run again, k
   expect(await ui.find({ type: 'Text', text: '480 GB free · 68 GB clearable' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'nope' })).toBeUndefined()
   await ui.unmount()
+})
+
+// ── a prompt typed while a turn runs waits behind it (prompt.submit carries that turn's id) ──
+
+const DISK = JOBS.find(j => j.name === 'Disk space on C:')!
+const DOCKER = JOBS.find(j => j.name === 'Docker health')!
+const ended = (turnId: string, answer: string) => ({ answer, durationMs: 10, isAborted: false, turnId, reason: 'completed' }) as any
+const engine = (on: any) => {
+  mock.store(on, {})
+  on('command.register', () => ({ value: { command: 'x' } }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('prompt.submit', async (_$: any, e: any) => ({ text: e.text }))
+  on('turn.start', async (_$: any, e: any) => ({ turnId: e.turnId }))
+  on('turn.complete', async () => ({ text: '' }))
+}
+// a job's row as the panel draws it: its name, status and result (or blurb) in one string
+const rowOf = async ($: any, job: string) => {
+  const ui = await mountPane($, 'desktop')
+  const row = (await ui.find({ key: `job-${job}` }))?.text ?? ''
+  await ui.unmount()
+  return row
+}
+
+test('a prompt typed over a job\'s turn leaves the job its hat and its result', EN, async ($, on) => {
+  engine(on)
+  await $.prompt.submit({ text: jobPrompt(DISK) } as any)
+  await $.turn.start({ text: jobPrompt(DISK), turnId: 't1' } as any)
+  await $.prompt.submit({ text: 'and check D: as well', turnId: 't1' } as any)
+  expect(await rowOf($, DISK.name)).toContain('● running')
+  await $.turn.complete(ended('t1', 'Result: 480 GB free · 68 GB clearable'))
+  expect(await rowOf($, DISK.name)).toBe('◇Disk space on C:✓ just now480 GB free · 68 GB clearableRun again')
+  // the typed follow-up's own turn is an ordinary one: no job, no result
+  await $.turn.start({ text: 'and check D: as well', turnId: 't2' } as any)
+  await $.turn.complete(ended('t2', 'Result: D: is fine'))
+  expect(await rowOf($, DISK.name)).toContain('480 GB free · 68 GB clearable')
+})
+
+test('a job queued behind another waits, then wears its hat once its own turn starts', EN, async ($, on) => {
+  engine(on)
+  await $.prompt.submit({ text: jobPrompt(DISK) } as any)
+  await $.turn.start({ text: jobPrompt(DISK), turnId: 't1' } as any)
+  await $.prompt.submit({ text: jobPrompt(DOCKER), turnId: 't1' } as any)
+  expect(await rowOf($, DISK.name)).toContain('● running')
+  expect(await rowOf($, DOCKER.name)).toContain('○ queued')
+  await $.turn.complete(ended('t1', 'Result: 480 GB free'))
+  expect(await rowOf($, DISK.name)).toContain('480 GB free')
+  // A's result is A's alone, and B has no hat or result until its own turn starts
+  expect(await rowOf($, DOCKER.name)).toBe(`◇Docker health${DOCKER.blurb}Run`)
+  await $.turn.start({ text: jobPrompt(DOCKER), turnId: 't2' } as any)
+  expect(await rowOf($, DOCKER.name)).toContain('● running')
+  expect(await rowOf($, DISK.name)).not.toContain('● running')
+  await $.turn.complete(ended('t2', 'Result: 12 containers up'))
+  expect(await rowOf($, DOCKER.name)).toContain('12 containers up')
+  expect(await rowOf($, DISK.name)).toContain('480 GB free')
+  expect(await rowOf($, DISK.name)).not.toContain('12 containers up')
+})
+
+test('a prompt typed over a running turn keeps the band where it is', EN, async ($, on) => {
+  engine(on)
+  ;(on as any)('tool.call', async () => ({ result: 'ok' }))
+  resetGlide()
+  await $.prompt.submit({ text: 'look at the art' } as any)
+  await $.turn.start({ text: 'look at the art', turnId: 't1' } as any)
+  for (let i = 0; i < 4; i++) await ($.tool.call as any)({ tool: 'Read', file_path: 'C:/x/art.ts', tool_use_id: `u${i}` })
+  // the band's percentage on each surface
+  const band = async () => {
+    const out: string[] = []
+    for (const surface of ['terminal', 'desktop'] as const) {
+      const ui = await $.ui.mount({ plugin: 'pixel-crew', surface, component: 'AbovePrompt', props: { isWorking: true, hasSurvey: false, maxRows: 10, bodyColumns: 100, scroll: { offset: 0, bodyRows: 10 }, view: {} } as any })
+      out.push(`${surface} ${(await ui.find({ text: /\d+%/ }))?.text?.match(/\d+%/)?.[0]}`)
+      await ui.unmount()
+    }
+    return out
+  }
+  // four tools into the turn: the estimate stands at 35%
+  expect(await band()).toEqual(['terminal 35%', 'desktop 35%'])
+  await $.prompt.submit({ text: 'then the README', turnId: 't1' } as any)
+  expect(await band()).toEqual(['terminal 35%', 'desktop 35%'])
+  // its own turn, once it starts, begins at 0%
+  await $.turn.complete(ended('t1', 'done'))
+  await $.turn.start({ text: 'then the README', turnId: 't2' } as any)
+  expect(await band()).toEqual(['terminal 0%', 'desktop 0%'])
+  resetGlide()
+})
+
+test('while a turn runs no job row offers Run, and /crew-run says to wait', EN, async ($, on) => {
+  engine(on)
+  await $.prompt.submit({ text: jobPrompt(DISK) } as any)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await mountPane($, surface)
+    for (const job of JOBS) expect(await ui.find({ key: `run-${job.name}` })).toBeUndefined()
+    expect(await ui.find({ text: 'Run comes back when this turn ends' })).toBeDefined()
+    await ui.unmount()
+  }
+  const busy: any = await $.command.run({ command: 'crew-run', args: 'Docker health' } as any)
+  expect(busy.text).toBe('Claude is busy; try again when this turn ends.')
+  await $.turn.complete(ended('t1', 'Result: fine'))
+  const ui = await mountPane($, 'desktop')
+  expect(await ui.find({ key: 'run-Docker health' })).toBeDefined()
+  expect(await ui.find({ text: 'Run comes back when this turn ends' })).toBeUndefined()
+  await ui.unmount()
+  // a slash command answered with text is no turn: the Run buttons stay
+  await $.prompt.submit({ text: '/crew-skin party', command: { name: 'crew-skin', args: 'party' } } as any)
+  const after = await mountPane($, 'terminal')
+  expect(await after.find({ key: 'run-Docker health' })).toBeDefined()
+  await after.unmount()
 })
 
 test('/crew-add takes Name | prompt, or the last prompt you typed', () => {
