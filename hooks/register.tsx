@@ -342,7 +342,8 @@ export const STRIP: ReadonlyArray<[string, readonly string[]]> = [
   ['Review', ['review', 'regress']],
 ]
 
-export type StripStep = { label: string; text: string; state: 'done' | 'active' | 'pending' }
+/** A failed stage has nobody running and at least one agent that failed; `failed` counts those agents. */
+export type StripStep = { label: string; text: string; state: 'done' | 'failed' | 'active' | 'pending'; failed: number }
 
 /** The stage strip for a council round's agents, or null when none of them is a council agent. */
 export function stripOf(crew: readonly PcAgent[]): StripStep[] | null {
@@ -351,23 +352,38 @@ export function stripOf(crew: readonly PcAgent[]): StripStep[] | null {
   const groups = STRIP.map(([label, stages]) => {
     const own = council.filter(a => stages.includes(a.stage!))
     const builds = own.filter(a => a.stage === 'build')
+    const failed = own.filter(a => a.status === 'failed').length
+    const ok = (list: readonly PcAgent[]) => list.filter(a => a.status === 'done').length
+    const helperFailed = failed - builds.filter(a => a.status === 'failed').length
     return {
       label,
       total: own.length,
+      failed,
       running: own.filter(a => a.status === 'running').length,
+      // counts only the agents that finished well, so "2/3" never hides a failure;
+      // a failed preflight, salvage or verify agent is added as "1✗"
       text:
         label === 'Build' && builds.length
-          ? `${label} ${builds.filter(a => a.status !== 'running').length}/${builds.length}`
-          : own.length
-            ? `${label} ${own.length}`
-            : label,
+          ? `${label} ${ok(builds)}/${builds.length}${helperFailed ? ` ${helperFailed}✗` : ''}`
+          : failed
+            ? `${label} ${ok(own)}/${own.length}`
+            : own.length
+              ? `${label} ${own.length}`
+              : label,
     }
   })
   const lastSeen = groups.reduce((at, g, i) => (g.total ? i : at), -1)
   return groups.map((g, i) => ({
     label: g.label,
     text: g.text,
-    state: g.running ? 'active' : g.total && (i < lastSeen || groups.every(x => !x.running)) ? 'done' : 'pending',
+    failed: g.failed,
+    state: g.running
+      ? 'active'
+      : g.total && (g.failed || i < lastSeen || groups.every(x => !x.running))
+        ? g.failed
+          ? 'failed'
+          : 'done'
+        : 'pending',
   }))
 }
 
@@ -1324,17 +1340,22 @@ export const register: Register = (on, options) => {
       <Box key="strip" flexDirection="column">
         <Box flexDirection="row" justifyContent="space-between" gap={1}>
           <Text bold wrap="truncate">{r ? `Council r${r.round} · ${r.mode}${r.project ? ` · ${r.project}` : ''}` : 'Council round'}</Text>
-          {strip.every(s => s.state !== 'active') && <Text color="#3FB27F">done</Text>}
+          {strip.every(s => s.state !== 'active') &&
+            (strip.some(s => s.failed) ? (
+              <Text color={ERROR}>{`done (${strip.reduce((n, s) => n + s.failed, 0)} failed)`}</Text>
+            ) : (
+              <Text color="#3FB27F">done</Text>
+            ))}
         </Box>
         <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
           {strip.map(s => (
             <Text
               key={`strip-${s.label}`}
-              color={s.state === 'active' ? CLAY : s.state === 'done' ? '#3FB27F' : undefined}
+              color={s.state === 'active' ? CLAY : s.state === 'done' ? '#3FB27F' : s.state === 'failed' ? ERROR : undefined}
               bold={s.state === 'active'}
               dimColor={s.state === 'pending'}
             >
-              {`${s.state === 'done' ? '✓' : s.state === 'active' ? '●' : '○'} ${s.text}`}
+              {`${s.state === 'done' ? '✓' : s.state === 'failed' ? '✗' : s.state === 'active' ? '●' : '○'} ${s.text}`}
             </Text>
           ))}
         </Box>

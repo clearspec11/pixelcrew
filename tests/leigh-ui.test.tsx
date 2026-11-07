@@ -218,6 +218,60 @@ test('the stage strip follows a council round: done, active and pending stages',
   expect(stripOf([a('x', undefined as any, 'running')])).toBeNull()
 })
 
+test('the stage strip shows a failed stage as ✗ and counts only the agents that finished well', () => {
+  const a = (id: string, stage: string, status: 'running' | 'done' | 'failed') =>
+    ({ id, stage, status, description: id, type: 'g', role: 'worker', model: 'm', startedAt: 0, tokens: 0, costUsd: 0, ctxTokens: 0, steps: 0, tools: 0, tasks: [] }) as any
+  const line = (crew: any[]) => stripOf(crew)!.map(s => `${s.state} ${s.text}`)
+  const voted = [a('p1', 'propose', 'done'), a('p2', 'propose', 'failed'), a('m', 'merge', 'done'), a('v', 'vote', 'done')]
+  // a build that failed reads ✗ with 2/3, not "done 3/3"; an earlier stage with a failure stays failed
+  expect(line([...voted, a('b1', 'build', 'done'), a('b2', 'build', 'failed'), a('b3', 'build', 'done')])).toEqual([
+    'failed Propose 1/2', 'done Merge 1', 'done Vote 1', 'failed Build 2/3', 'pending Review',
+  ])
+  // a stage still running is active even with a failure in it
+  expect(line([...voted, a('b1', 'build', 'failed'), a('b2', 'build', 'running')])[3]).toBe('active Build 0/2')
+  // every build stopped: 0/3; a failed verify agent is counted beside the builds
+  expect(line([...voted, ...['b1', 'b2', 'b3'].map(id => a(id, 'build', 'failed'))])[3]).toBe('failed Build 0/3')
+  expect(line([...voted, a('b1', 'build', 'done'), a('t', 'verify', 'failed')])[3]).toBe('failed Build 1/1 1✗')
+  expect(stripOf([...voted, a('b1', 'build', 'failed'), a('r', 'review', 'failed')])!.reduce((n, s) => n + s.failed, 0)).toBe(3)
+  // an all-success round is unchanged
+  expect(line([a('p', 'propose', 'done'), a('b', 'build', 'done'), a('r', 'review', 'done')])).toEqual([
+    'done Propose 1', 'pending Merge', 'pending Vote', 'done Build 1/1', 'done Review 1',
+  ])
+})
+
+test('a council round whose build failed says ✗ Build and "done (1 failed)" in the panel; a clean one says done', EN, async ($, on) => {
+  let n = 0
+  on('agent.spawn', async () => ({ model: 'claude-opus-5-5', agentId: `agent-${++n}` }))
+  on('turn.complete', async () => ({ text: '' }))
+  // the strip header: the only bright "done…" text (an agent row's own "done" is dimmed)
+  const header = async (ui: any) => (await ui.findAll({ type: 'Text', text: /^done/ })).filter((e: any) => !e.props.dimColor).map((e: any) => e.text)
+  const end = (agentId: string, reason: string) =>
+    $.turn.complete({ agentId, answer: 'x', durationMs: 10, isAborted: reason === 'aborted', turnId: agentId, reason } as any)
+  // no council agents: no strip
+  await $.agent.spawn({ prompt: 'go', description: 'Fix the login bug', subagentType: 'general-purpose' } as any)
+  await end('agent-1', 'answer')
+  let ui = await mountPane($, 'desktop')
+  expect(await ui.find({ text: /Council round/ })).toBeUndefined()
+  await ui.unmount()
+  await $.agent.spawn({ prompt: 'go', description: 'build:P1', subagentType: 'general-purpose' } as any)
+  await end('agent-2', 'answer')
+  for (const surface of ['terminal', 'desktop'] as const) {
+    ui = await mountPane($, surface)
+    expect(await ui.find({ text: /✓ Build 1\/1/ })).toBeDefined()
+    expect(await header(ui)).toEqual(['done'])
+    await ui.unmount()
+  }
+  await $.agent.spawn({ prompt: 'go', description: 'build:P2', subagentType: 'general-purpose' } as any)
+  await end('agent-3', 'aborted')
+  for (const surface of ['terminal', 'desktop'] as const) {
+    ui = await mountPane($, surface)
+    expect(await ui.find({ text: /✗ Build 1\/2/ })).toBeDefined()
+    expect(await ui.find({ text: /✓ Build/ })).toBeUndefined()
+    expect(await header(ui)).toEqual(['done (1 failed)'])
+    await ui.unmount()
+  }
+})
+
 test('with nobody working, quick run fills the panel; a job name shows its prompt; Run sends it', EN, async ($, on) => {
   const sent: string[] = []
   on('prompt.submit', async (_$: any, e: any) => {
