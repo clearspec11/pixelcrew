@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import { bandRaster, barRaster, barSvg, CLAY, fade, LINE_ART, mascotSvg, spriteRaster } from '../hooks/art'
 import { langOf, strings } from '../hooks/i18n'
-import { activityOf, councilTitle, estimate, glide, priceOf, resetGlide, roleOf, statusLine, windowOf } from '../hooks/register'
+import { activityOf, capCrew, councilTitle, estimate, glide, priceOf, resetGlide, roleOf, statusLine, windowOf } from '../hooks/register'
 import { parseCouncil, PERSONAS } from '../hooks/council'
 
 const BAND: any = {
@@ -1085,5 +1085,104 @@ test('the desktop and terminal bars draw the same pixels', async () => {
       expect(svg[0]![x]).toBe(fg === TRACK ? undefined : fg)
       expect(svg[1]![x]).toBe(bg === TRACK ? undefined : bg)
     })
+  }
+})
+
+// ── The 40-row cap: trimmed agents stay in the totals, running ones stay on the list ──
+const crewOf = (statuses: Array<'running' | 'done' | 'failed'>) =>
+  statuses.map(
+    (status, i) =>
+      ({ id: `a${i + 1}`, status, description: `Agent ${i + 1}`, type: 'g', role: 'worker', model: 'm', startedAt: i, tokens: 0, costUsd: 0, ctxTokens: 0, steps: 0, tools: 0, tasks: [] }) as any,
+  )
+
+test('the cap drops the oldest finished agents first and keeps a running one', () => {
+  const list = crewOf(['running', ...Array(44).fill('done')])
+  const { kept, dropped } = capCrew([...list, crewOf(Array(46).fill('running'))[45]], 40)
+  expect(kept.length).toBe(40)
+  expect(kept[0]!.id).toBe('a1')
+  expect(kept[39]!.id).toBe('a46')
+  expect(dropped.map(a => a.id)).toEqual(['a2', 'a3', 'a4', 'a5', 'a6', 'a7'])
+  // under the cap nothing moves
+  expect(capCrew(list.slice(0, 40), 40).dropped).toEqual([])
+})
+
+test('the cap keeps every running agent, even past 40', () => {
+  const { kept, dropped } = capCrew(crewOf(Array(50).fill('running')), 40)
+  expect(kept.length).toBe(50)
+  expect(dropped).toEqual([])
+  // finished agents still make way for them
+  const mixed = capCrew(crewOf([...Array(5).fill('done'), ...Array(45).fill('running')]), 40)
+  expect(mixed.kept.length).toBe(45)
+  expect(mixed.dropped.map(a => a.id)).toEqual(['a1', 'a2', 'a3', 'a4', 'a5'])
+})
+
+test('45 finished agents: the totals count all 45 and say 5 were folded in', EN, async ($, on) => {
+  ;(on as any)('ui.open', () => ({ value: { isPlaced: false, reason: 'no-surface' } }))
+  // the first five ran on Sonnet 5.1 and cost more; they are the ones the cap trims
+  const modelOf = (n: number) => (n <= 5 ? 'claude-sonnet-5-1' : 'claude-opus-5-5')
+  let n = 0
+  on('agent.spawn', async () => ({ model: modelOf(n + 1), agentId: `ag-${++n}` }))
+  on('turn.step', async function* (_$: any, e: any) {
+    const k = Number(String(e.agentId).slice(3))
+    return {
+      turnId: e.turnId,
+      index: e.index,
+      answer: '',
+      toolUses: [],
+      stopReason: 'end_turn',
+      usage: { model: modelOf(k), input_tokens: 0, output_tokens: k <= 5 ? 50_000 : 10_000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+    }
+  } as any)
+  on('turn.complete', async () => ({ text: '' }))
+  for (let k = 1; k <= 45; k++) {
+    await $.agent.spawn({ prompt: 'go', description: `Check part ${k}`, subagentType: 'general-purpose' } as any)
+    const stream = ($.turn as any).step({ turnId: `t${k}`, index: 0, model: modelOf(k), agentId: `ag-${k}` })
+    for await (const _ of stream);
+    // the second agent failed: trimmed off the list, it must still show in the ✗ count
+    const reason = k === 2 ? 'error' : 'answer'
+    await $.turn.complete({ agentId: `ag-${k}`, answer: 'ok', durationMs: 10, isAborted: false, turnId: `t${k}`, reason } as any)
+  }
+  // 5 × 50k on Sonnet 5.1 ($10/M out) + 40 × 10k on Opus 5.5 ($20/M out)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ plugin: 'pixel-crew', surface, component: 'Pane', props: PANE, requestId: 'pixel-crew-agents' })
+    expect(await ui.find({ text: '≈$10.50' })).toBeDefined()
+    expect(await ui.find({ text: '650k' })).toBeDefined()
+    expect(await ui.find({ text: '44✓ 1✗' })).toBeDefined()
+    expect(await ui.find({ text: '+5 earlier agents folded into the totals' })).toBeDefined()
+    expect(await ui.find({ text: /^Sonnet 5\.1 ≈\$2\.50 · 250k$/ })).toBeDefined()
+    expect(await ui.find({ text: /^Opus 5\.5 ≈\$8\.00 · 400k$/ })).toBeDefined()
+    // the rows are the 40 newest; the list header counts what it opens
+    expect(await ui.find({ text: /Finished · 40/ })).toBeDefined()
+    expect(await ui.find({ text: /Check part 45$/ })).toBeDefined()
+    expect(await ui.find({ text: /Check part 5$/ })).toBeUndefined()
+    await ui.unmount()
+  }
+  const out = await ($.command.run as any)({ command: 'crew', args: '' })
+  expect(out.text).toMatch(/Cost ≈\$10\.50 · Tokens 650k/)
+  expect(out.text).toMatch(/\+5 earlier agents folded into the totals/)
+  // /crew-clear empties the folded totals with the rows
+  await ($.command.run as any)({ command: 'crew-clear', args: '' })
+  const ui = await $.ui.mount({ plugin: 'pixel-crew', surface: 'desktop', component: 'Pane', props: PANE, requestId: 'pixel-crew-agents' })
+  expect(await ui.find({ text: /folded into the totals/ })).toBeUndefined()
+  expect(await ui.find({ text: '≈$0.00' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a long round keeps its oldest agent on the panel while it still runs', EN, async ($, on) => {
+  let n = 0
+  on('agent.spawn', async () => ({ model: 'claude-opus-5-5', agentId: `ag-${++n}` }))
+  on('turn.complete', async () => ({ text: '' }))
+  await $.agent.spawn({ prompt: 'go', description: 'Watch the long migration', subagentType: 'general-purpose' } as any)
+  for (let k = 2; k <= 45; k++) {
+    await $.agent.spawn({ prompt: 'go', description: `Check part ${k}`, subagentType: 'general-purpose' } as any)
+    await $.turn.complete({ agentId: `ag-${k}`, answer: 'ok', durationMs: 10, isAborted: false, turnId: `t${k}`, reason: 'answer' } as any)
+  }
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ plugin: 'pixel-crew', surface, component: 'Pane', props: PANE, requestId: 'pixel-crew-agents' })
+    expect(await ui.find({ text: /Running · 1/ })).toBeDefined()
+    expect(await ui.find({ text: /Watch the long migration/ })).toBeDefined()
+    expect(await ui.find({ text: '1● 44✓' })).toBeDefined()
+    expect(await ui.find({ text: '+5 earlier agents folded into the totals' })).toBeDefined()
+    await ui.unmount()
   }
 })

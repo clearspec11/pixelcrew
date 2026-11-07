@@ -80,6 +80,22 @@ export type PcActiveJob = { name: string; hat: PcHat; startedAt: number }
 /** A quick-run job typed while a turn ran: it waits behind that turn until its own starts. */
 export type PcPendingJob = { name: string; hat: PcHat }
 
+/**
+ * The agents trimmed off the panel's 40-row list, summed so the totals on top
+ * still count them: how many, how they ended, what they cost, and since when.
+ */
+export type PcRetired = {
+  n: number
+  done: number
+  failed: number
+  cost: number
+  tokens: number
+  /** cost and tokens by short model name ("Opus 5.5"), Codex left out as in the panel's per-model lines */
+  byModel: Record<string, { cost: number; tokens: number }>
+  /** the earliest start among them, for the Time total; 0 when none */
+  since: number
+}
+
 /** The council round in flight, from the Workflow call that launched it. */
 export type PcRound = { round: number; mode: string; project: string; startedAt: number }
 
@@ -112,6 +128,8 @@ declare module 'claude-code' {
     'pixel-crew': {
       tasks: PcTask[]
       agents: PcAgent[]
+      /** agents trimmed off `agents`, folded into the totals; /crew-clear empties it */
+      retired: PcRetired
       now: number
       frame: number
       showDone: boolean

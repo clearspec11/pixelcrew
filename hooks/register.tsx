@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { PcActiveJob, PcAgent, PcFx, PcJob, PcMain, PcPendingJob, PcResult, PcRole, PcRound, PcSkin, PcTask } from '../types'
+import type { PcActiveJob, PcAgent, PcFx, PcJob, PcMain, PcPendingJob, PcResult, PcRetired, PcRole, PcRound, PcSkin, PcTask } from '../types'
 import { ago, allJobs, findJob, hatOf, jobOfPrompt, jobPrompt, parseAdd, resultLine } from './quickrun'
 import { ALERT, bandRaster, barRaster, barSvg, CLAY, fade, mascotSvg, MAX_RASTER_COLUMNS, ROLES, roleLabel, roleSymbol, spriteRaster, spriteSvg } from './art'
 
@@ -76,6 +76,10 @@ type CouncilBand = { isFinished?: boolean } | undefined
 
 const tasks = atom({ plugin: 'pixel-crew', key: 'tasks' } as const, [])
 const agents = atom({ plugin: 'pixel-crew', key: 'agents' } as const, [])
+// the panel keeps 40 rows; the agents trimmed off are summed here so the totals still count them
+const CREW_MAX = 40
+const NONE_RETIRED: PcRetired = { n: 0, done: 0, failed: 0, cost: 0, tokens: 0, byModel: {}, since: 0 }
+const retired = atom({ plugin: 'pixel-crew', key: 'retired' } as const, NONE_RETIRED)
 const now = atom({ plugin: 'pixel-crew', key: 'now' } as const, 0)
 const frame = atom({ plugin: 'pixel-crew', key: 'frame' } as const, 0)
 const showDone = atom({ plugin: 'pixel-crew', key: 'showDone' } as const, true)
@@ -422,10 +426,53 @@ async function patchAgent($: EngineInterface, id: string, fn: (a: PcAgent) => Pc
   await update($, agents, list => list.map(a => (a.id === id ? fn(a) : a)))
 }
 
+/**
+ * The crew trimmed to `max` rows: the oldest finished agents go first. A
+ * running agent always stays, even past `max`: its steps still to come would
+ * have no row to land on, and the totals would lose them. The order is kept.
+ */
+export function capCrew(list: readonly PcAgent[], max: number): { kept: PcAgent[]; dropped: PcAgent[] } {
+  if (list.length <= max) return { kept: [...list], dropped: [] }
+  const running = list.filter(a => a.status === 'running')
+  const room = Math.max(0, max - running.length)
+  const finished = list.filter(a => a.status !== 'running')
+  const stay = new Set([...finished.slice(finished.length - room), ...running].map(a => a.id))
+  return { kept: list.filter(a => stay.has(a.id)), dropped: list.filter(a => !stay.has(a.id)) }
+}
+
+/** The retired totals with `dropped` added in: their count, endings, cost, tokens, models and earliest start. */
+export function foldRetired(r: PcRetired, dropped: readonly PcAgent[]): PcRetired {
+  const byModel = { ...r.byModel }
+  let since = r.since
+  for (const a of dropped) {
+    since = since ? Math.min(since, a.startedAt) : a.startedAt
+    if (a.role === 'codex') continue
+    const m = shortModel(a.model)
+    const had = byModel[m] ?? { cost: 0, tokens: 0 }
+    byModel[m] = { cost: had.cost + a.costUsd, tokens: had.tokens + a.tokens }
+  }
+  return {
+    n: r.n + dropped.length,
+    done: r.done + dropped.filter(a => a.status === 'done').length,
+    failed: r.failed + dropped.filter(a => a.status === 'failed').length,
+    cost: r.cost + dropped.reduce((s, a) => s + a.costUsd, 0),
+    tokens: r.tokens + dropped.reduce((s, a) => s + a.tokens, 0),
+    byModel,
+    since,
+  }
+}
+
 async function addAgent($: EngineInterface, agent: PcAgent) {
   const before = await read($, agents)
   const wasIdle = !before.some(a => a.status === 'running')
-  await update($, agents, list => [...list.filter(a => a.id !== agent.id), agent].slice(-40))
+  // the rows trimmed by this write, read off the list it was applied to
+  let dropped: PcAgent[] = []
+  await update($, agents, list => {
+    const capped = capCrew([...list.filter(a => a.id !== agent.id), agent], CREW_MAX)
+    dropped = capped.dropped
+    return capped.kept
+  })
+  if (dropped.length) await update($, retired, r => foldRetired(r, dropped))
   await update($, now, () => agent.startedAt)
   if (wasIdle) {
     await update($, batchStart, () => agent.startedAt)
@@ -672,7 +719,7 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'crew' }, async $ => {
     const opened = await $.ui.open({ id: PANE, title: 'Agents' })
     if (opened.isPlaced) return { text: L.paneOpened }
-    return { text: crewText(await read($, agents), await read($, now), await read($, tasks), await read($, skin)) }
+    return { text: crewText(await read($, agents), await read($, retired), await read($, now), await read($, tasks), await read($, skin)) }
   })
 
   // /crew-bar alterna; /crew-bar on|off (ou ligar/desligar, activar/desactivar) escolhe
@@ -743,6 +790,7 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'crew-clear' }, async $ => {
     await update($, tasks, () => [])
     await update($, agents, () => [])
+    await update($, retired, () => NONE_RETIRED)
     await update($, openRows, () => [])
     await update($, round, () => null)
     return { text: L.cleared }
@@ -1136,15 +1184,18 @@ export const register: Register = (on, options) => {
     return { progress, phase, stats, mark, sub }
   }
 
+  // under the totals when the 40-row list has trimmed agents: they are still counted above
+  const foldLine = (n: number) => `+${n} earlier ${n === 1 ? 'agent' : 'agents'} folded into the totals`
+
   // o painel em texto, para quem vê a sessão de fora (telefone, web, app
   // remoto): nenhuma superfície desenha painéis ali, só o texto do comando chega
-  const crewText = (crew: PcAgent[], t: number, mainTasks: { status: string; subject?: string }[], look: PcSkin = 'crew') => {
+  const crewText = (crew: PcAgent[], gone: PcRetired, t: number, mainTasks: { status: string; subject?: string }[], look: PcSkin = 'crew') => {
     const clock = Math.max(t, Date.now())
     const running = crew.filter(a => a.status === 'running')
     const finished = crew.filter(a => a.status !== 'running')
-    const cost = crew.reduce((s, a) => s + a.costUsd, 0)
-    const tokensTotal = crew.reduce((s, a) => s + a.tokens, 0)
-    const first = crew.reduce((m, a) => Math.min(m, a.startedAt), Infinity)
+    const cost = gone.cost + crew.reduce((s, a) => s + a.costUsd, 0)
+    const tokensTotal = gone.tokens + crew.reduce((s, a) => s + a.tokens, 0)
+    const first = crew.reduce((m, a) => Math.min(m, a.startedAt), gone.since || Infinity)
     const last = running.length ? clock : crew.reduce((m, a) => Math.max(m, a.endedAt ?? a.startedAt), 0)
     const elapsed = crew.length ? last - first : 0
     const kit = mainTasks.find(x => x.status === 'in_progress')?.subject ?? (crew.length ? L.team : L.noAgentsYet)
@@ -1157,6 +1208,7 @@ export const register: Register = (on, options) => {
       L.paneText,
       kit,
       `${L.cost} ${fmtCost(cost)} · ${L.tokens} ${fmtTokens(tokensTotal)} · ${L.time} ${fmtTime(elapsed)}`,
+      ...(gone.n ? [foldLine(gone.n)] : []),
       L.running(running.length),
       ...(running.length ? running.map(line) : [L.nobodyWorking]),
     ]
@@ -1167,6 +1219,7 @@ export const register: Register = (on, options) => {
   // ── Painel lateral dos agents ─────────────────────────────────────────
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const crew = await read($, agents)
+    const gone = await read($, retired)
     const t = await read($, now)
     const f = await read($, frame)
     const expanded = await read($, showDone)
@@ -1179,9 +1232,9 @@ export const register: Register = (on, options) => {
 
     const running = crew.filter(a => a.status === 'running')
     const finished = crew.filter(a => a.status !== 'running')
-    const cost = crew.reduce((s, a) => s + a.costUsd, 0)
-    const tokensTotal = crew.reduce((s, a) => s + a.tokens, 0)
-    const first = crew.reduce((m, a) => Math.min(m, a.startedAt), Infinity)
+    const cost = gone.cost + crew.reduce((s, a) => s + a.costUsd, 0)
+    const tokensTotal = gone.tokens + crew.reduce((s, a) => s + a.tokens, 0)
+    const first = crew.reduce((m, a) => Math.min(m, a.startedAt), gone.since || Infinity)
     const last = running.length ? clock : crew.reduce((m, a) => Math.max(m, a.endedAt ?? a.startedAt), 0)
     const elapsed = crew.length ? last - first : 0
     const mainTasks = await read($, tasks)
@@ -1365,8 +1418,10 @@ export const register: Register = (on, options) => {
     // ── totals: per model, done and failed, the longest finished ──
     const failedN = finished.filter(a => a.status === 'failed').length
     const doneN = finished.length - failedN
-    const agentsValue = [running.length ? `${running.length}●` : '', `${doneN}✓`, failedN ? `${failedN}✗` : ''].filter(Boolean).join(' ')
-    const byModel = new Map<string, { cost: number; tokens: number }>()
+    // the Agents total counts the trimmed agents too: the rows plus the folded ones
+    const allFailed = failedN + gone.failed
+    const agentsValue = [running.length ? `${running.length}●` : '', `${doneN + gone.done}✓`, allFailed ? `${allFailed}✗` : ''].filter(Boolean).join(' ')
+    const byModel = new Map<string, { cost: number; tokens: number }>(Object.entries(gone.byModel))
     for (const a of crew) {
       if (a.role === 'codex') continue
       const m = shortModel(a.model)
@@ -1469,6 +1524,7 @@ export const register: Register = (on, options) => {
           {metric(L.time, fmtTime(elapsed), 'm-time')}
           {crew.length > 0 && metric('Agents', agentsValue, 'm-agents')}
         </Box>
+        {gone.n > 0 && <Text key="folded" dimColor wrap="truncate">{foldLine(gone.n)}</Text>}
         {(models.length > 1 || longest) && (
           <Box flexDirection="column">
             {models.length > 1 && models.map(([m, v]) => (
