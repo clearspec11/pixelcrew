@@ -270,6 +270,8 @@ test("the mascot's marks read on every card: the '!', the sleep Z, the quill and
   check('quill', spriteSvg('scribe', 2, false, 0, PERSONAS.mira!.color).source, FEATHER)
   // every confetti colour turned up, in both themes
   expect(marks.confetti!.seen.size).toBeGreaterThanOrEqual(12)
+  // the quill stays two tones in each theme: a vane and its lighter highlight
+  for (const theme of ['dark', 'light']) expect([...marks.quill!.seen.keys()].filter(k => k.startsWith(theme)).length).toBe(2)
   for (const [mark, { min, seen }] of Object.entries(marks)) {
     expect(seen.size).toBeGreaterThan(1)
     for (const [fill, ratio] of seen) expect({ mark, fill, ok: ratio >= min }).toEqual({ mark, fill, ok: true })
@@ -1280,8 +1282,11 @@ test('every bar colour reads on the dark and the light card, both rows and empty
         expect(css).toContain(`.f{fill:${t.fill}}`)
         expect(css).toContain(`.h{fill:${t.hi}}`)
         const tag = `${name}${still ? ' (still)' : ''} on ${theme}`
-        // a running bar is two tones, and its glint is lighter than both rows
-        if (!still && t.hi.toLowerCase() === t.fill.toLowerCase()) bad.push(`${tag}: one tone ${t.fill}`)
+        // a bar is two tones the eye can tell apart, the top row the lighter
+        // (a hex one step off would still be one tone), and its glint is
+        // lighter than both rows
+        const step = seenOn(t.hi, t.fill)
+        if (step < 1.2 || lum(rgbOf(t.hi)) <= lum(rgbOf(t.fill))) bad.push(`${tag}: rows ${t.hi} over ${t.fill} are ${step.toFixed(2)} apart`)
         if (lum(rgbOf(t.glint)) <= Math.max(lum(rgbOf(t.hi)), lum(rgbOf(t.fill)))) bad.push(`${tag}: glint ${t.glint} not the lightest`)
         for (const card of cards) {
           const fill = seenOn(t.fill, card)
