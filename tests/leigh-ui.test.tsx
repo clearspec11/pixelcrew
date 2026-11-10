@@ -334,6 +334,95 @@ test('a council round whose build failed says ✗ Build and "done (1 failed)" in
   }
 })
 
+// panel text on the real cards: a theme key resolved through Claude Code
+// 2.1.318's own tables (dark, light), or a hex, must reach 4.5:1 as text on both
+const CARDS = { dark: '#252525', light: '#F5F4EF' }
+const THEME: Record<string, { dark: string; light: string }> = {
+  success: { dark: '#4EBA65', light: '#2C7A39' },
+  error: { dark: '#FF6B80', light: '#AB2B3F' },
+  text: { dark: '#FFFFFF', light: '#000000' },
+}
+const lum = (hex: string) => {
+  const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255).map(v => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4))
+  return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!
+}
+const ratio = (a: string, b: string) => (Math.max(lum(a), lum(b)) + 0.05) / (Math.min(lum(a), lum(b)) + 0.05)
+/** the weaker of the two cards; a key it doesn't know, or no colour at all, fails */
+const textContrast = (color: unknown) => {
+  const tones = typeof color !== 'string' ? undefined : THEME[color] ?? (/^#[0-9a-f]{6}$/i.test(color) ? { dark: color, light: color } : undefined)
+  if (!tones) throw new Error(`not a colour this test can measure: ${String(color)}`)
+  return Math.min(ratio(tones.dark, CARDS.dark), ratio(tones.light, CARDS.light))
+}
+
+test('the old literals failed on the light card; no single hex can pass on both', () => {
+  expect(ratio('#3FB27F', CARDS.light)).toBeLessThan(4.5)
+  expect(ratio('#D97757', CARDS.light)).toBeLessThan(4.5)
+  // 4.5:1 on #252525 needs luminance ≥ 0.258, on #F5F4EF ≤ 0.162: a theme key per card it is
+  expect(4.5 * (lum(CARDS.dark) + 0.05) - 0.05).toBeGreaterThan((lum(CARDS.light) + 0.05) / 4.5 - 0.05)
+})
+
+test('done, running and failed text in the panel reads at 4.5:1 on the dark and the light card', EN, async ($, on) => {
+  let n = 0
+  on('agent.spawn', async () => ({ model: 'claude-opus-5-5', agentId: `agent-${++n}` }))
+  on('turn.complete', async () => ({ text: '' }))
+  on('prompt.submit', async (_$: any, e: any) => ({ text: e.text }))
+  const end = (agentId: string, reason: string) =>
+    $.turn.complete({ agentId, answer: 'x', durationMs: 10, isAborted: reason === 'aborted', turnId: agentId, reason } as any)
+  const reads = async (ui: any, text: RegExp | string) => {
+    const el = await ui.find({ type: 'Text', text })
+    expect(el).toBeDefined()
+    expect(textContrast(el.props.color)).toBeGreaterThanOrEqual(4.5)
+    return el
+  }
+  // a round with a failed proposal, a done merge and a build still running
+  await $.agent.spawn({ prompt: 'go', description: 'propose:ines', subagentType: 'general-purpose' } as any)
+  await $.agent.spawn({ prompt: 'go', description: 'propose:vex', subagentType: 'general-purpose' } as any)
+  await end('agent-1', 'answer')
+  await end('agent-2', 'aborted')
+  await $.agent.spawn({ prompt: 'go', description: 'merge', subagentType: 'general-purpose' } as any)
+  await end('agent-3', 'answer')
+  await $.agent.spawn({ prompt: 'go', description: 'build:B3', subagentType: 'general-purpose' } as any)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await mountPane($, surface, { ...PANE, bodyColumns: 60 })
+    await reads(ui, /^✗ Propose 1\/2/)
+    await reads(ui, /^✓ Merge 1/)
+    // running is the plain text colour; bold and the ● say it, not a tint
+    expect((await reads(ui, /^● Build 0\/1/)).props.bold).toBe(true)
+    // each row's mark: ● running, ✓ done, ✗ failed
+    for (const mark of ['●', '✓', '✗']) await reads(ui, mark)
+    await ui.unmount()
+  }
+  // the round ends: the strip's header
+  await end('agent-4', 'answer')
+  let ui = await mountPane($, 'desktop')
+  await reads(ui, 'done (1 failed)')
+  await ui.unmount()
+  // a quick-run job: running, then a good result, then a failed one
+  const disk = JOBS.find(j => j.name === 'Disk space on C:')!
+  for (const [reason, status] of [['completed', '✓ just now'], ['error', '✗ just now']] as const) {
+    await $.prompt.submit({ text: jobPrompt(disk) } as any)
+    ui = await mountPane($, 'desktop')
+    await reads(ui, '● running')
+    await ui.unmount()
+    await $.turn.complete({ answer: 'Result: 480 GB free', durationMs: 10, isAborted: false, turnId: `t-${reason}`, reason } as any)
+    ui = await mountPane($, 'desktop')
+    await reads(ui, status)
+    await ui.unmount()
+  }
+})
+
+test('a clean council round says done in the theme\'s own green', EN, async ($, on) => {
+  on('agent.spawn', async () => ({ model: 'claude-opus-5-5', agentId: 'agent-1' }))
+  on('turn.complete', async () => ({ text: '' }))
+  await $.agent.spawn({ prompt: 'go', description: 'build:B3', subagentType: 'general-purpose' } as any)
+  await $.turn.complete({ agentId: 'agent-1', answer: 'x', durationMs: 10, isAborted: false, turnId: 't', reason: 'answer' } as any)
+  const ui = await mountPane($, 'desktop')
+  const header = (await ui.findAll({ type: 'Text', text: 'done' })).find((e: any) => !e.props.dimColor)
+  expect(header?.props.color).toBe('success')
+  expect(textContrast(header?.props.color)).toBeGreaterThanOrEqual(4.5)
+  await ui.unmount()
+})
+
 test('with nobody working, quick run fills the panel; a job name shows its prompt; Run sends it', EN, async ($, on) => {
   const sent: string[] = []
   on('prompt.submit', async (_$: any, e: any) => {

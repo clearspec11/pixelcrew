@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { ALERT, ALERT_THEMED, bandRaster, barRaster, barSvg, barTones, CLAY, fade, LINE_ART, mascotSvg, PARTY, ROLES, roleLabel, spriteRaster } from '../hooks/art'
+import { ALERT, ALERT_THEMED, bandRaster, barRaster, barSvg, barTones, CLAY, fade, LINE_ART, mascotPixels, mascotSvg, PARTY, ROLES, roleLabel, spriteRaster } from '../hooks/art'
 import { langOf, strings } from '../hooks/i18n'
 import { activityOf, capCrew, councilTitle, ERROR, estimate, glide, priceOf, resetGlide, roleOf, statusLine, windowOf } from '../hooks/register'
 import { parseCouncil, PERSONAS, SPARE } from '../hooks/council'
@@ -186,17 +186,27 @@ test('the desktop band keeps its height when Claude becomes the boss', EN, async
   expect(chief.height).toBe(clawd.height)
 })
 
-// the band's height is the mascot's: no role, mood, frame or confetti may change it
-test('the mascot keeps one size in every role, mood and frame', () => {
+// the band's height is the mascot's: no role, skin, hat, mood, frame or confetti may change it
+test('the mascot keeps one size in every role, skin, hat, mood and frame', () => {
   const sizes = new Set<string>()
+  // mascotSvg sizes its frame from the grid, so a taller hat can't grow the
+  // band: box() drops what falls off the grid and the viewBox (rows -1 to 14)
+  // cuts what a hop lifts past it. So this also pins who leaves the frame
+  // upward. Only the magnifier's and the quill's tips do, at the top of the
+  // hop, and a hat comes off when its turn ends, before that hop.
+  const cut = new Set<string>()
   for (const role of ['clawd', 'boss'] as const)
-    for (const pose of ['walk', 'jump', 'sleep', 'alert', 'shake'] as const)
-      for (const confetti of [false, true])
-        for (let f = 0; f < 40; f++) {
-          const s = mascotSvg(role, pose, f, 2, confetti)
-          sizes.add(`${s.width}x${s.height}`)
-        }
+    for (const skin of ['crew', 'party'] as const)
+      for (const hat of [undefined, 'hardhat', 'lantern', 'magnifier', 'goggles', 'quill', 'broom'] as const)
+        for (const pose of ['walk', 'jump', 'sleep', 'alert', 'shake'] as const)
+          for (const confetti of [false, true])
+            for (let f = 0; f < 40; f++) {
+              const s = mascotSvg(role, pose, f, 2, confetti, skin, hat)
+              sizes.add(`${s.width}x${s.height}`)
+              if (mascotPixels(role, pose, f, confetti, skin, hat).some(p => p.y < -1)) cut.add(`${role} ${hat ?? 'bare'} ${pose}`)
+            }
   expect([...sizes]).toEqual(['36x32'])
+  expect([...cut]).toEqual(['clawd magnifier jump', 'clawd quill jump'])
 })
 
 test('the band speaks Portuguese', PT, async ($, on) => {
