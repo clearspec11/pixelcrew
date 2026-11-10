@@ -11,14 +11,17 @@ export const ALERT = '#F5C542'
 export type Themed = { dark: string; light: string }
 
 /**
- * The desktop "needs you" bar in the host's own amber, the theme key 'warning'
- * the alert title is drawn in, so bar and title are one amber per theme. Values
- * from Claude Code 2.1.318's theme tables: dark warning rgb(255,193,7), light
- * rgb(150,108,30). Both read as they are (9.4:1 on #252525, 4.3:1 on #F5F4EF).
- * The SVG sees only prefers-color-scheme, so the colour-blind and ANSI themes
- * (whose 'warning' is #FF9900, #FFCC00 or the terminal's yellow) get these.
+ * The desktop "needs you" bar in the amber the alert title is drawn in there,
+ * so bar and title are one amber per theme. The title names the theme key
+ * 'warning'; only the desktop app draws this SVG bar, and it paints that key
+ * with its own token --cds-text-warning: #E49C06 on dark, #794C02 on light
+ * (Claude desktop, November 2026; its older palette has #DB9300 and #734500, a
+ * shade off). Both read as they are (6.6:1 on #252525, 6.7:1 on #F5F4EF). The
+ * terminal's 'warning' is another amber (#FFC107 dark, #966C1E light in Claude
+ * Code 2.1.318), but the terminal draws a Raster in ALERT, never this bar. An
+ * SVG cannot read a theme key, so if the app changes its token this drifts.
  */
-export const ALERT_THEMED: Themed = { dark: '#FFC107', light: '#966C1E' }
+export const ALERT_THEMED: Themed = { dark: '#E49C06', light: '#794C02' }
 
 export type RoleInfo = { label: string; color: string; light: string }
 

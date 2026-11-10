@@ -1154,20 +1154,23 @@ test('the light theme darkens the amber and the clay, the dark theme lifts the b
   for (const c of [CLAY, ALERT, ROLES.boss.color, ERROR]) expect(seenOn(barTones(c).light.hi, LIGHT)).toBeGreaterThanOrEqual(1.4)
 })
 
-// the alert title is the theme key 'warning'; the bar paints that key's own hex
-// per theme (Claude Code 2.1.318's tables), so the two are one amber
-test("the waiting bar is the theme's 'warning' amber in each theme", async () => {
+// the alert title is the theme key 'warning'. Only the desktop app draws the
+// SVG bar, and it paints 'warning' with its token --cds-text-warning (#E49C06
+// dark, #794C02 light), so the bar paints those and the two are one amber
+// there. The terminal's 'warning' (#FFC107, #966C1E) never meets this bar: the
+// terminal draws a Raster.
+test("the waiting bar is the desktop app's 'warning' amber in each theme", async () => {
   const t = barTones(ALERT_THEMED)
-  expect(t.dark.fill).toBe('#FFC107')
-  expect(t.light.fill).toBe('#966C1E')
+  expect(t.dark.fill).toBe('#E49C06')
+  expect(t.light.fill).toBe('#794C02')
   // and those read as they are: no toning needed on either card
   expect(seenOn(t.dark.fill, DARK)).toBeGreaterThanOrEqual(3)
   expect(seenOn(t.light.fill, LIGHT)).toBeGreaterThanOrEqual(3)
   expect(seenOn(t.dark.fill, DARK, t.dark.track)).toBeGreaterThanOrEqual(1.4)
   expect(seenOn(t.light.fill, LIGHT, t.light.track)).toBeGreaterThanOrEqual(1.4)
-  // its class is its own: a plain #FFC107 bar can't repaint it
+  // its class is its own: a plain bar of either hex can't repaint it
   const root = (s: string) => /<svg[^>]* class="([^"]+)"/.exec(s)![1]
-  expect(root(barSvg({ ratio: 0.5, color: ALERT_THEMED }))).not.toBe(root(barSvg({ ratio: 0.5, color: '#FFC107' })))
+  for (const hex of [ALERT_THEMED.dark, ALERT_THEMED.light]) expect(root(barSvg({ ratio: 0.5, color: ALERT_THEMED }))).not.toBe(root(barSvg({ ratio: 0.5, color: hex })))
 })
 
 test('bars of different colours keep their styles apart', async () => {

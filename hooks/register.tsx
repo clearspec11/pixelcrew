@@ -1090,8 +1090,8 @@ export const register: Register = (on, options) => {
     const alerting = pose === 'alert'
     // o texto usa o âmbar do tema ('warning'): #F5C542 em texto some no tema
     // claro (1,47:1 no #F5F4EF), e a chave segue o tema de quem lê. A barra do
-    // desktop usa o mesmo âmbar por tema (ALERT_THEMED, os hex de 'warning');
-    // o raster do terminal segue com ALERT
+    // desktop usa o mesmo âmbar por tema (ALERT_THEMED, os hex que o app do
+    // desktop dá a 'warning'); o raster do terminal segue com ALERT
     const alertInk = 'warning'
 
     const color = shaking ? ERROR : alerting ? ALERT : delegating ? ROLES.boss.color : CLAY
