@@ -121,8 +121,12 @@ export const ERROR = '#E24B4A'
  * theme ('success' is #4EBA65 on dark, #2C7A39 on light in Claude Code
  * 2.1.318). Running is the plain text colour, bold or with ●: the host's
  * 'claude' accent is CLAY again on light. Bars and sprites keep CLAY and ERROR.
+ * The role or persona name under a row is plain text for the same reason: no
+ * role or persona hex reaches 4.5:1 on both cards (Pip #B9D23C was 1.54:1 on
+ * #F5F4EF), and the host has no theme key per role. Its colour stays on what
+ * is drawn in it: the sprite, the symbol and the bar.
  */
-export const INK = { done: 'success', failed: 'error', active: 'text' } as const
+export const INK = { done: 'success', failed: 'error', active: 'text', role: 'text' } as const
 
 // A barra da faixa desliza até o progresso novo em vez de pular: a cada
 // desenho anda uma fração do que falta, pelo tempo passado (não pelo número de
@@ -1382,7 +1386,7 @@ export const register: Register = (on, options) => {
                 <Text color={markColor}>{mark}</Text>
               </Box>
               <Box flexDirection="row" gap={1}>
-                <Text color={tint}>{label}</Text>
+                <Text color={INK.role}>{label}</Text>
                 <Text dimColor>{sub}</Text>
               </Box>
               <Box flexDirection="row" justifyContent="space-between" gap={1}>
@@ -1413,7 +1417,7 @@ export const register: Register = (on, options) => {
               <Text color={markColor}>{mark}</Text>
             </Box>
             <Box flexDirection="row" gap={1}>
-              <Text color={tint}>{label}</Text>
+              <Text color={INK.role}>{label}</Text>
               <Text dimColor>{sub}</Text>
             </Box>
             <Box flexDirection="row" justifyContent="space-between" gap={1}>

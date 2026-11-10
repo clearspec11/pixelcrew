@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { ALERT, ALERT_THEMED, bandRaster, barRaster, barSvg, barTones, CLAY, DARK_CARDS, fade, LIGHT_CARDS, LINE_ART, mascotPixels, mascotSvg, PARTY, ROLES, roleLabel, spriteRaster, spriteSvg } from '../hooks/art'
+import { ALERT, ALERT_THEMED, bandRaster, barRaster, barSvg, barTones, CLAY, DARK_CARDS, fade, LIGHT_CARDS, LINE_ART, mascotPixels, mascotSvg, PARTY, ROLE_SYMBOL, ROLES, roleLabel, spriteRaster, spriteSvg } from '../hooks/art'
 import { langOf, strings } from '../hooks/i18n'
 import { activityOf, capCrew, councilTitle, ERROR, estimate, glide, priceOf, resetGlide, roleOf, statusLine, windowOf } from '../hooks/register'
 import { parseCouncil, PERSONAS, SPARE } from '../hooks/council'
@@ -973,12 +973,17 @@ test('a council agent shows its persona, stage character and colour', EN, async 
     expect(await ui.find({ text: /Dot · proposing/ })).toBeDefined()
     expect(await ui.find({ text: /Vex · voting/ })).toBeDefined()
     expect(await ui.find({ text: /Seat P13 · building/ })).toBeDefined()
-    // the stage picks the character, the persona its colour
+    // the stage picks the character, the persona its colour: on the drawn
+    // things (symbol, sprite), while the name under the title is plain text
     const researcher = (await ui.findAll({ type: 'Text' })).find(t => t.text === 'researcher')
-    expect(researcher?.props.color).toBe(PERSONAS.dot!.color)
+    expect(researcher?.props.color).toBe('text')
     const voter = (await ui.findAll({ type: 'Text' })).find(t => t.text === 'voter')
-    expect(voter?.props.color).toBe(PERSONAS.vex!.color)
+    expect(voter?.props.color).toBe('text')
     expect(await ui.find({ text: 'developer' })).toBeDefined()
+    if (surface === 'terminal') {
+      expect((await ui.find({ type: 'Text', text: ROLE_SYMBOL.researcher }))?.props.color).toBe(PERSONAS.dot!.color)
+      expect((await ui.find({ type: 'Text', text: ROLE_SYMBOL.voter }))?.props.color).toBe(PERSONAS.vex!.color)
+    }
     if (surface === 'desktop') {
       const sprites = (await ui.findAll({ type: 'Svg' })).map(s => String(s.props.source))
       expect(sprites.some(src => src.includes(PERSONAS.dot!.color))).toBe(true)

@@ -2,7 +2,8 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import { activityOf, parseSkin, recentOf, resetGlide, statusLine, stripOf, windowLabel } from '../hooks/register'
 import { ago, allJobs, ASK_FIRST, findJob, hatOf, jobOfPrompt, jobPrompt, JOBS, parseAdd, RESULT_ASK, resultLine } from '../hooks/quickrun'
-import { mascotSvg, PARTY, spriteSvg } from '../hooks/art'
+import { DARK_CARDS, fade, LIGHT_CARDS, mascotSvg, PARTY, roleLabel, ROLES, roleSymbol, spriteSvg } from '../hooks/art'
+import { PERSONAS, personaOf, SPARE } from '../hooks/council'
 import { strings } from '../hooks/i18n'
 import type { PcRole } from '../types'
 
@@ -424,6 +425,83 @@ test('a clean council round says done in the theme\'s own green', EN, async ($, 
   expect(header?.props.color).toBe('success')
   expect(textContrast(header?.props.color)).toBeGreaterThanOrEqual(4.5)
   await ui.unmount()
+})
+
+/** the weakest of every dark and every light card the app has been seen with, both hosts */
+const textContrastAll = (color: unknown) => {
+  const tones = typeof color === 'string' ? THEME[color] : undefined
+  if (!tones) throw new Error(`not a theme key this test can measure: ${String(color)}`)
+  return Math.min(...tones.flatMap(t => [...DARK_CARDS.map(c => ratio(t.dark, c)), ...LIGHT_CARDS.map(c => ratio(t.light, c))]))
+}
+
+test('no role or persona colour reads as text on both a dark and a light card', () => {
+  const colours = [...Object.values(ROLES).map(r => r.color), ...Object.values(PERSONAS).map(p => p.color), ...SPARE]
+  for (const c of colours) {
+    expect(Math.min(...DARK_CARDS.map(d => ratio(c, d)), ...LIGHT_CARDS.map(l => ratio(c, l)))).toBeLessThan(4.5)
+  }
+  // Round 3's reviewer: Pip and Mira as label text on the light card
+  expect(ratio(PERSONAS.pip!.color, '#F5F4EF')).toBeLessThan(2)
+  expect(ratio(PERSONAS.mira!.color, '#F5F4EF')).toBeLessThan(2.5)
+})
+
+test('every role and persona name in the panel reads at 4.5:1 on every card, in both skins', EN, async ($, on) => {
+  mock.store(on, {})
+  on('command.register', () => ({ value: { command: 'x' } }))
+  on('turn.complete', async () => ({ text: '' }))
+  let n = 0
+  on('agent.spawn', async () => ({ model: 'claude-opus-5-5', agentId: `agent-${++n}` }))
+  // one agent per role, the way each gets its role; the boss is never a row
+  // (it is Claude itself, and roleOf never returns it)
+  const byRole: Array<[PcRole, string, string]> = [
+    ['developer', 'Build the page', 'general-purpose'],
+    ['artist', 'Design the logo', 'general-purpose'],
+    ['researcher', 'Research the API', 'general-purpose'],
+    ['worker', 'Move the files', 'general-purpose'],
+    ['tester', 'Test the login', 'general-purpose'],
+    ['codex', 'Ask Codex', 'codex'],
+    ['voter', 'vote', 'general-purpose'],
+    ['scribe', 'merge', 'general-purpose'],
+    ['skeptic', 'review', 'general-purpose'],
+  ]
+  expect(byRole.map(r => r[0]).sort()).toEqual((Object.keys(ROLES) as PcRole[]).filter(r => r !== 'boss').sort())
+  for (const [, description, subagentType] of byRole) await $.agent.spawn({ prompt: 'go', description, subagentType } as any)
+  // the first one finishes: a done row, its symbol faded
+  await $.turn.complete({ agentId: 'agent-1', answer: 'x', durationMs: 10, isAborted: false, turnId: 'agent-1', reason: 'answer' } as any)
+  // a council proposer for every persona, and one whose colour falls to SPARE
+  const spare = 'zed'
+  expect(PERSONAS[spare]).toBeUndefined()
+  expect(SPARE).toContain(personaOf(spare).color)
+  const personas = [...Object.keys(PERSONAS), spare]
+  for (const key of personas) await $.agent.spawn({ prompt: 'go', description: `propose:${key}`, subagentType: 'general-purpose' } as any)
+
+  const props = { ...PANE, bodyColumns: 60, scroll: { offset: 0, bodyRows: 400 } }
+  for (const skin of ['crew', 'party'] as const) {
+    await $.command.run({ command: 'crew-skin', args: skin } as any)
+    for (const surface of ['terminal', 'desktop'] as const) {
+      const ui = await mountPane($, surface, props)
+      const texts = await ui.findAll({ type: 'Text' })
+      for (const [role] of byRole) {
+        const label = roleLabel(role, skin)
+        const found = texts.filter((t: any) => t.text === label)
+        // the proposers all wear the researcher's label: one row each
+        expect(found.length).toBe(role === 'researcher' ? 1 + personas.length : 1)
+        for (const t of found) {
+          expect(t.props.color).toBe('text')
+          expect(textContrastAll(t.props.color)).toBeGreaterThanOrEqual(4.5)
+        }
+      }
+      // the role's colour stays on what is drawn in it. The terminal's symbol is
+      // decoration paired with the label beside the title, like the sprite on
+      // the desktop: it carries the colour, the label carries the words
+      if (surface === 'terminal') {
+        const sym = (role: PcRole) => texts.filter((t: any) => t.text === roleSymbol(role, skin)).map((t: any) => String(t.props.color).toUpperCase())
+        expect(sym('developer')).toEqual([fade(ROLES.developer.color).toUpperCase()])
+        expect(sym('artist')).toEqual([ROLES.artist.color.toUpperCase()])
+        expect(sym('researcher').sort()).toEqual([ROLES.researcher.color, ...personas.map(k => personaOf(k).color)].map(c => c.toUpperCase()).sort())
+      }
+      await ui.unmount()
+    }
+  }
 })
 
 test('with nobody working, quick run fills the panel; a job name shows its prompt; Run sends it', EN, async ($, on) => {
