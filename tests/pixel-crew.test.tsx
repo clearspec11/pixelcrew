@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { ALERT, ALERT_THEMED, bandRaster, barRaster, barSvg, barTones, CLAY, fade, LINE_ART, mascotPixels, mascotSvg, PARTY, ROLES, roleLabel, spriteRaster } from '../hooks/art'
+import { ALERT, ALERT_THEMED, bandRaster, barRaster, barSvg, barTones, CLAY, DARK_CARDS, fade, LIGHT_CARDS, LINE_ART, mascotPixels, mascotSvg, PARTY, ROLE_SYMBOL, ROLES, roleLabel, spriteRaster, spriteSvg } from '../hooks/art'
 import { langOf, strings } from '../hooks/i18n'
 import { activityOf, capCrew, councilTitle, ERROR, estimate, glide, priceOf, resetGlide, roleOf, statusLine, windowOf } from '../hooks/register'
 import { parseCouncil, PERSONAS, SPARE } from '../hooks/council'
@@ -191,9 +191,9 @@ test('the mascot keeps one size in every role, skin, hat, mood and frame', () =>
   const sizes = new Set<string>()
   // mascotSvg sizes its frame from the grid, so a taller hat can't grow the
   // band: box() drops what falls off the grid and the viewBox (rows -1 to 14)
-  // cuts what a hop lifts past it. So this also pins who leaves the frame
-  // upward. Only the magnifier's and the quill's tips do, at the top of the
-  // hop, and a hat comes off when its turn ends, before that hop.
+  // cuts what a hop lifts past it. So this also pins that nobody leaves the
+  // frame upward: a hat that reaches the grid's top row (the magnifier, the
+  // quill) hops one pixel lower instead of losing its tip.
   const cut = new Set<string>()
   for (const role of ['clawd', 'boss'] as const)
     for (const skin of ['crew', 'party'] as const)
@@ -206,7 +206,95 @@ test('the mascot keeps one size in every role, skin, hat, mood and frame', () =>
               if (mascotPixels(role, pose, f, confetti, skin, hat).some(p => p.y < -1)) cut.add(`${role} ${hat ?? 'bare'} ${pose}`)
             }
   expect([...sizes]).toEqual(['36x32'])
-  expect([...cut]).toEqual(['clawd magnifier jump', 'clawd quill jump'])
+  expect([...cut]).toEqual([])
+})
+
+// ── The mascot's marks on both cards ────────────────────────────────────
+// The sprite SVG keeps the dark colour in each rect's fill and swaps a mark's
+// tone with a class under @media (prefers-color-scheme: light). The marks are
+// found by where they are drawn, not by their class, so a mark left untoned fails.
+
+/** The colour each cell shows in a theme: the last rect drawn there wins. */
+const paintOf = (source: string, theme: 'dark' | 'light') => {
+  const light = new Map<string, string>()
+  const media = /@media \(prefers-color-scheme: light\)\{(.*?)\}<\/style>/.exec(source)?.[1] ?? ''
+  for (const [, k, c] of media.matchAll(/\.([\w-]+)\{fill:(#[0-9A-Fa-f]{6})\}/g)) light.set(k!, c!)
+  const cells = new Map<string, string>()
+  for (const [, x, y, fill, k] of source.matchAll(/<rect x="(-?\d+)" y="(-?\d+)" width="1.02" height="1.02" fill="(#[0-9A-Fa-f]{6})"(?: class="([\w-]+)")?\/>/g)) {
+    if (k) expect(light.has(k)).toBe(true)
+    cells.set(`${x},${y}`, theme === 'light' && k ? light.get(k)! : fill!)
+  }
+  return cells
+}
+const Z_AT = (frame: number) => {
+  const [x0, y0] = frame % 2 ? [13, -1] : [12, 1]
+  return ['XXXXX', '...X.', '..X..', '.X...', 'XXXXX'].flatMap((row, j) => [...row].flatMap((ch, i) => (ch === 'X' ? [`${x0 + i},${y0 + j}`] : [])))
+}
+// the scribe's quill (the vane and its highlight), also worn as the quill hat
+const FEATHER = ['0,0', '0,1', '1,1', '0,2', '1,2', '2,2', '1,3', '2,3', '1,4', '2,4', '3,4', '2,5', '3,5']
+const CARDS = { dark: [...new Set([...DARK_CARDS, '#191919'])], light: [...new Set([...LIGHT_CARDS, '#FFFFFF'])] }
+
+test("the mascot's marks read on every card: the '!', the sleep Z, the quill and the confetti", () => {
+  const worstOn = (fill: string, theme: 'dark' | 'light') => Math.min(...CARDS[theme].map(card => seenOn(fill, card)))
+  const marks: Record<string, { min: number; seen: Map<string, number> }> = {
+    '!': { min: 3, seen: new Map() },
+    'sleep Z': { min: 3, seen: new Map() },
+    quill: { min: 1.4, seen: new Map() },
+    confetti: { min: 1.4, seen: new Map() },
+  }
+  const check = (mark: string, source: string, at: string[]) => {
+    for (const theme of ['dark', 'light'] as const) {
+      const cells = paintOf(source, theme)
+      for (const xy of at) {
+        const fill = cells.get(xy)
+        expect(fill).toBeDefined()
+        if (mark === '!') expect(fill!.toUpperCase()).toBe(ALERT_THEMED[theme].toUpperCase())
+        marks[mark]!.seen.set(`${theme} ${fill}`, worstOn(fill!, theme))
+      }
+    }
+  }
+  for (const role of ['clawd', 'boss'] as const)
+    for (const skin of ['crew', 'party'] as const)
+      for (const hat of [undefined, 'hardhat', 'lantern', 'magnifier', 'goggles', 'quill', 'broom'] as const)
+        for (let f = 0; f < 40; f++) {
+          check('!', mascotSvg(role, 'alert', f, 2, true, skin, hat).source, ['17,0', '17,1', '17,2', '17,4'])
+          check('sleep Z', mascotSvg(role, 'sleep', f, 2, true, skin, hat).source, Z_AT(f))
+          // confetti: what the jump draws with it that it does not draw without
+          const bare = mascotSvg(role, 'jump', f, 2, false, skin, hat).source
+          const withIt = mascotSvg(role, 'jump', f, 2, true, skin, hat).source
+          const plain = paintOf(bare, 'dark')
+          check('confetti', withIt, [...paintOf(withIt, 'dark')].filter(([xy, c]) => plain.get(xy) !== c).map(([xy]) => xy))
+        }
+  check('quill', mascotSvg('clawd', 'walk', 0, 2, true, 'crew', 'quill').source, FEATHER)
+  check('quill', spriteSvg('scribe').source, FEATHER)
+  check('quill', spriteSvg('scribe', 2, false, 0, PERSONAS.mira!.color).source, FEATHER)
+  // every confetti colour turned up, in both themes
+  expect(marks.confetti!.seen.size).toBeGreaterThanOrEqual(12)
+  // the quill stays two tones in each theme: a vane and its lighter highlight
+  for (const theme of ['dark', 'light']) expect([...marks.quill!.seen.keys()].filter(k => k.startsWith(theme)).length).toBe(2)
+  for (const [mark, { min, seen }] of Object.entries(marks)) {
+    expect(seen.size).toBeGreaterThan(1)
+    for (const [fill, ratio] of seen) expect({ mark, fill, ok: ratio >= min }).toEqual({ mark, fill, ok: true })
+  }
+})
+
+test('the desktop mascot paints the dark theme as the terminal does, but for the "!"', () => {
+  // the dark art is mascotPixels' colours, the terminal's; only the "!" takes
+  // the desktop amber of its bar and title, which the terminal draws as ALERT
+  for (const role of ['clawd', 'boss'] as const)
+    for (const hat of [undefined, 'magnifier', 'quill'] as const)
+      for (const pose of ['walk', 'jump', 'sleep', 'alert', 'shake'] as const)
+        for (const f of [0, 3, 7, 12, 19]) {
+          const px = mascotPixels(role, pose, f, true, 'crew', hat)
+          const want = new Map(px.map(p => [`${p.x},${p.y}`, p.fill]))
+          if (pose === 'alert') for (const y of [0, 1, 2, 4]) {
+            expect(want.get(`17,${y}`)).toBe(ALERT)
+            want.set(`17,${y}`, ALERT_THEMED.dark)
+          }
+          expect(Object.fromEntries(paintOf(mascotSvg(role, pose, f, 2, true, 'crew', hat).source, 'dark'))).toEqual(Object.fromEntries(want))
+        }
+  // a sprite with nothing to tone carries no style at all
+  expect(mascotSvg('clawd', 'walk').source).not.toContain('<style>')
 })
 
 test('the band speaks Portuguese', PT, async ($, on) => {
@@ -455,6 +543,59 @@ test('a failed tool turns the bar red for a moment', EN, async ($, on) => {
   const svgs = await ui.findAll({ type: 'Svg' })
   expect(svgs.some(s => String(s.props.source).includes('#E24B4A'))).toBe(true)
   await ui.unmount()
+})
+
+// a failure and then a question inside the shake window: waiting wins, so the
+// bar, the title, the alt and the "!" all say waiting in the one amber
+test('a question asked while the bar shakes turns it amber, not red', EN, async ($, on) => {
+  resetGlide()
+  let fail = true
+  ;(on as any)('tool.call', { tool: 'Bash' }, async () => (fail ? { isError: true, result: 'boom', text: 'boom' } : { result: 'ok', text: 'ok' }))
+  ;(on as any)('tool.check', async (_: any, e: any, next: any) => (e.tool === 'Bash' ? { decision: 'ask' } : next(e)))
+  const barOf = async (ui: any) => (await ui.findAll({ type: 'Svg' })).find((s: any) => String(s.props.source).includes('viewBox="0 0 60 2"'))!
+  const desktop = () => $.ui.mount({ plugin: 'pixel-crew', surface: 'desktop', component: 'AbovePrompt', props: BAND })
+  const terminal = () => $.ui.mount({ plugin: 'pixel-crew', surface: 'terminal', component: 'AbovePrompt', props: { ...BAND, bodyColumns: 40 } })
+
+  // alone, the failure is red on both surfaces, with the ✗ beside the title
+  await ($.tool.call as any)({ tool: 'Bash', input: { command: 'exit 1', description: 'Run the build' }, tool_use_id: 'tu-1' })
+  let ui = await desktop()
+  let bar = String((await barOf(ui)).props.source)
+  expect(bar).toContain(ERROR)
+  expect(bar).not.toContain(ALERT_THEMED.dark)
+  expect(bar).not.toContain(ALERT_THEMED.light)
+  await ui.unmount()
+  ui = await terminal()
+  expect((await ui.find({ type: 'Text', text: /✗/ }))?.props.color).toBe(ERROR)
+  await ui.unmount()
+
+  // still inside the shake window, a permission is asked
+  fail = false
+  await ($.tool.check as any)({ tool: 'Bash', input: { command: 'ls build' }, tool_use_id: 'tu-2' })
+  ui = await desktop()
+  const svg = await barOf(ui)
+  bar = String(svg.props.source)
+  expect(bar).toContain(`.f{fill:${ALERT_THEMED.dark}}`)
+  expect(bar).toContain(`.f{fill:${ALERT_THEMED.light}}`)
+  expect(bar).not.toContain(ERROR)
+  const title = await ui.find({ type: 'Text', text: /Waiting for your permission/ })
+  expect(title?.props.color).toBe('warning')
+  expect(svg.props.alt).toBe('Waiting for your permission')
+  await ui.unmount()
+
+  ui = await terminal()
+  expect((await ui.find({ type: 'Text', text: /Waiting for your permission/ }))?.props.color).toBe('warning')
+  const mark = await ui.find({ type: 'Text', text: /!/ })
+  expect(mark?.props.color).toBe('warning')
+  expect(await ui.find({ type: 'Text', text: /✗/ })).toBeUndefined()
+  const raster = await ui.find({ type: 'Raster' })
+  expect(raster!.props.rows).toBe(1)
+  const colors = new Set(decodeCells(String(raster!.props.cells)).flatMap(([, fg, bg]) => [fg, bg]))
+  expect(colors.has(0xf5c542)).toBe(true)
+  expect(colors.has(0xe24b4a)).toBe(false)
+  await ui.unmount()
+
+  // the status line says the same: "!", the waiting title, no %
+  expect(statusLine({ title: 'Waiting for your permission', target: 0.4, count: '', pose: 'alert', delegating: false, shaking: true, crew: 0 })).toBe('! Waiting for your permission')
 })
 
 test('/crew-bar turns the band off and on', EN, async ($, on) => {
@@ -887,12 +1028,17 @@ test('a council agent shows its persona, stage character and colour', EN, async 
     expect(await ui.find({ text: /Dot · proposing/ })).toBeDefined()
     expect(await ui.find({ text: /Vex · voting/ })).toBeDefined()
     expect(await ui.find({ text: /Seat P13 · building/ })).toBeDefined()
-    // the stage picks the character, the persona its colour
+    // the stage picks the character, the persona its colour: on the drawn
+    // things (symbol, sprite), while the name under the title is plain text
     const researcher = (await ui.findAll({ type: 'Text' })).find(t => t.text === 'researcher')
-    expect(researcher?.props.color).toBe(PERSONAS.dot!.color)
+    expect(researcher?.props.color).toBe('text')
     const voter = (await ui.findAll({ type: 'Text' })).find(t => t.text === 'voter')
-    expect(voter?.props.color).toBe(PERSONAS.vex!.color)
+    expect(voter?.props.color).toBe('text')
     expect(await ui.find({ text: 'developer' })).toBeDefined()
+    if (surface === 'terminal') {
+      expect((await ui.find({ type: 'Text', text: ROLE_SYMBOL.researcher }))?.props.color).toBe(PERSONAS.dot!.color)
+      expect((await ui.find({ type: 'Text', text: ROLE_SYMBOL.voter }))?.props.color).toBe(PERSONAS.vex!.color)
+    }
     if (surface === 'desktop') {
       const sprites = (await ui.findAll({ type: 'Svg' })).map(s => String(s.props.source))
       expect(sprites.some(src => src.includes(PERSONAS.dot!.color))).toBe(true)
@@ -1115,7 +1261,12 @@ const barColours = () => {
   return out
 }
 
-test('every bar colour reads on the dark and the light card, fill and empty track', async () => {
+// The bar is two pixel rows: the top one painted .h, the bottom one .f. Both
+// rows are measured, on every card of each theme (the tests' cards and the
+// installed app's own surfaces), so neither row can slip under 3:1 unseen.
+test('every bar colour reads on the dark and the light card, both rows and empty track', async () => {
+  expect(DARK_CARDS).toEqual(expect.arrayContaining([DARK, '#262624', '#191919', '#1F1F1F']))
+  expect(LIGHT_CARDS).toEqual(expect.arrayContaining([LIGHT, '#FFFFFF']))
   const bad: string[] = []
   for (const [name, base] of barColours())
     for (const still of [false, true]) {
@@ -1125,18 +1276,28 @@ test('every bar colour reads on the dark and the light card, fill and empty trac
       const src = barSvg({ ratio: 0.4, color, still })
       const [dark, light] = src.split('@media (prefers-color-scheme: light)')
       const tones = barTones(color, still)
-      for (const [theme, card, t, css] of [['dark', DARK, tones.dark, dark!], ['light', LIGHT, tones.light, light!]] as const) {
+      for (const [theme, cards, t, css] of [['dark', DARK_CARDS, tones.dark, dark!], ['light', LIGHT_CARDS, tones.light, light!]] as const) {
         // the tones measured are the ones the svg paints in that theme
         expect(css).toContain(`.t{fill:${t.fill};fill-opacity:${t.track}}`)
         expect(css).toContain(`.f{fill:${t.fill}}`)
         expect(css).toContain(`.h{fill:${t.hi}}`)
-        const fill = seenOn(t.fill, card)
-        const track = seenOn(t.fill, card, t.track)
         const tag = `${name}${still ? ' (still)' : ''} on ${theme}`
-        if (fill < 3) bad.push(`${tag}: fill ${fill.toFixed(2)}`)
-        if (track < 1.4) bad.push(`${tag}: track ${track.toFixed(2)}`)
-        // the empty bar is a hint, not a heavy slab
-        if (theme === 'light' && track >= 3) bad.push(`${tag}: track ${track.toFixed(2)} is a slab`)
+        // a bar is two tones the eye can tell apart, the top row the lighter
+        // (a hex one step off would still be one tone), and its glint is
+        // lighter than both rows
+        const step = seenOn(t.hi, t.fill)
+        if (step < 1.2 || lum(rgbOf(t.hi)) <= lum(rgbOf(t.fill))) bad.push(`${tag}: rows ${t.hi} over ${t.fill} are ${step.toFixed(2)} apart`)
+        if (lum(rgbOf(t.glint)) <= Math.max(lum(rgbOf(t.hi)), lum(rgbOf(t.fill)))) bad.push(`${tag}: glint ${t.glint} not the lightest`)
+        for (const card of cards) {
+          const fill = seenOn(t.fill, card)
+          const hi = seenOn(t.hi, card)
+          const track = seenOn(t.fill, card, t.track)
+          if (fill < 3) bad.push(`${tag} ${card}: bottom row ${fill.toFixed(2)}`)
+          if (hi < 3) bad.push(`${tag} ${card}: top row ${hi.toFixed(2)}`)
+          if (track < 1.4) bad.push(`${tag} ${card}: track ${track.toFixed(2)}`)
+          // the empty bar is a hint, not a heavy slab
+          if (theme === 'light' && track >= 3) bad.push(`${tag} ${card}: track ${track.toFixed(2)} is a slab`)
+        }
       }
     }
   expect(bad).toEqual([])

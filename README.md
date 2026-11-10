@@ -35,7 +35,7 @@ It reads the `council` plugin's band state when that plugin is installed (homela
 
 - **Done:** when a turn finishes well, it jumps among confetti at 100% for a couple of seconds.
 - **Waiting for you:** when Claude asks a question or needs your permission, it raises a hand with a `!`, the bar and the title turn amber, and the percentage steps aside.
-- **Something failed:** when one of Claude's tools fails, it shakes and the bar turns red for a moment.
+- **Something failed:** when one of Claude's tools fails, it shakes and the bar turns red for a moment. If Claude asks you something in that moment, waiting wins and the band turns amber.
 - **Asleep:** when nothing is running but the task list still has work, it dozes off.
 
 ![The mascot's moods](docs/moods.png)
