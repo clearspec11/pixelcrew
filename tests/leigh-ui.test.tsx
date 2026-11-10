@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import { activityOf, parseSkin, recentOf, resetGlide, statusLine, stripOf, windowLabel } from '../hooks/register'
 import { ago, allJobs, ASK_FIRST, findJob, hatOf, jobOfPrompt, jobPrompt, JOBS, parseAdd, RESULT_ASK, resultLine } from '../hooks/quickrun'
-import { DARK_CARDS, fade, LIGHT_CARDS, mascotSvg, PARTY, roleLabel, ROLES, roleSymbol, spriteSvg } from '../hooks/art'
+import { contrastOn, DARK_CARDS, LIGHT_CARDS, mascotSvg, PARTY, roleLabel, ROLES, roleSymbol, spriteSvg, symbolTone } from '../hooks/art'
 import { PERSONAS, personaOf, SPARE } from '../hooks/council'
 import { strings } from '../hooks/i18n'
 import type { PcRole } from '../types'
@@ -490,18 +490,149 @@ test('every role and persona name in the panel reads at 4.5:1 on every card, in 
           expect(textContrastAll(t.props.color)).toBeGreaterThanOrEqual(4.5)
         }
       }
-      // the role's colour stays on what is drawn in it. The terminal's symbol is
-      // decoration paired with the label beside the title, like the sprite on
-      // the desktop: it carries the colour, the label carries the words
-      if (surface === 'terminal') {
-        const sym = (role: PcRole) => texts.filter((t: any) => t.text === roleSymbol(role, skin)).map((t: any) => String(t.props.color).toUpperCase())
-        expect(sym('developer')).toEqual([fade(ROLES.developer.color).toUpperCase()])
-        expect(sym('artist')).toEqual([ROLES.artist.color.toUpperCase()])
-        expect(sym('researcher').sort()).toEqual([ROLES.researcher.color, ...personas.map(k => personaOf(k).color)].map(c => c.toUpperCase()).sort())
-      }
       await ui.unmount()
     }
   }
+})
+
+// the terminal's role symbol is text too: the person's theme (/config) says
+// which background it sits on, and the symbol takes its role's hue at the tone
+// that reads there, or the 'text' key when the theme doesn't say ('auto')
+const TBAND: any = { isWorking: true, hasSurvey: false, maxRows: 10, bodyColumns: 100, scroll: { offset: 0, bodyRows: 10 }, view: {} }
+const TERM = { dark: [...DARK_CARDS, '#191919', '#000000'], light: [...LIGHT_CARDS, '#FFFFFF'] }
+const symbolReads = (color: unknown, theme: string) => {
+  const shade = theme.startsWith('light') ? 'light' : theme.startsWith('dark') ? 'dark' : undefined
+  if (color === 'text') return true
+  if (!shade || typeof color !== 'string' || !/^#[0-9a-f]{6}$/i.test(color)) return false
+  return Math.min(...TERM[shade].map(bg => contrastOn(color, bg))) >= 4.5
+}
+// /config writes the theme the way the person's pick does, through config.set
+const setTheme = ($: any, value: string) => $.config.set({ key: 'theme', value })
+
+const THEMES = ['dark', 'light', 'dark-daltonized', 'light-ansi', 'auto']
+
+test('the terminal band\'s role symbol reads on a dark, a light and an unknown terminal, in both skins', EN, async ($, on) => {
+  on('config.set', { key: 'theme' }, (_$: any, e: any) => ({ value: e.value }))
+  mock.store(on, {})
+  on('command.register', () => ({ value: { command: 'x' } }))
+  on('turn.complete', async () => ({ text: '' }))
+  on('agent.spawn', async () => ({ model: 'claude-opus-5-5', agentId: 'boss-1' }))
+  for (const tool of ['Edit', 'Write', 'Grep', 'Bash']) (on as any)('tool.call', { tool }, async () => ({ result: 'ok', text: 'ok' }))
+  // what the band shows comes from Claude's last tool, the boss's crown while agents run
+  const work: Array<[PcRole, string, any]> = [
+    ['developer', 'Edit', { file_path: '/x/app.ts', old_string: 'a', new_string: 'b' }],
+    ['artist', 'Write', { file_path: '/x/theme.css', content: 'a{}' }],
+    ['researcher', 'Grep', { pattern: 'x' }],
+    ['tester', 'Bash', { command: 'yarn test', description: 'Run the tests' }],
+    ['codex', 'Bash', { command: 'codex exec review', description: 'Ask Codex' }],
+    ['worker', 'Bash', { command: 'ls', description: 'List files' }],
+  ]
+  const icon = async (role: PcRole, skin: 'crew' | 'party', theme: string) => {
+    const ui = await $.ui.mount({ plugin: 'pixel-crew', surface: 'terminal', component: 'AbovePrompt', props: TBAND } as any)
+    const t = await ui.find({ type: 'Text', text: roleSymbol(role, skin) })
+    await ui.unmount()
+    expect(t).toBeDefined()
+    expect(symbolReads(t!.props.color, theme)).toBe(true)
+    return t!.props.color
+  }
+  const shadeOf = (theme: string) => (theme.startsWith('light') ? 'light' : theme.startsWith('dark') ? 'dark' : undefined)
+  for (const skin of ['crew', 'party'] as const) {
+    await $.command.run({ command: 'crew-skin', args: skin } as any)
+    for (const theme of THEMES) {
+      await setTheme($, theme)
+      for (const [role, tool, input] of work) {
+        await ($.tool.call as any)({ tool, input })
+        // the role's own hue at the tone that theme reads, or the host's text colour
+        const shade = shadeOf(theme)
+        expect(await icon(role, skin, theme)).toBe(shade ? symbolTone(ROLES[role].color, shade) : 'text')
+      }
+    }
+  }
+  await $.agent.spawn({ prompt: 'go', description: 'Build the page', subagentType: 'general-purpose' } as any)
+  for (const skin of ['crew', 'party'] as const) {
+    await $.command.run({ command: 'crew-skin', args: skin } as any)
+    for (const theme of THEMES) {
+      await setTheme($, theme)
+      const shade = shadeOf(theme)
+      expect(await icon('boss', skin, theme)).toBe(shade ? symbolTone(ROLES.boss.color, shade) : 'text')
+    }
+  }
+})
+
+test('the terminal panel\'s role symbol reads on a dark, a light and an unknown terminal, every role, skin and persona', EN, async ($, on) => {
+  on('config.set', { key: 'theme' }, (_$: any, e: any) => ({ value: e.value }))
+  mock.store(on, {})
+  on('command.register', () => ({ value: { command: 'x' } }))
+  on('turn.complete', async () => ({ text: '' }))
+  let n = 0
+  on('agent.spawn', async () => ({ model: 'claude-opus-5-5', agentId: `agent-${++n}` }))
+  const byRole: Array<[PcRole, string, string]> = [
+    ['developer', 'Build the page', 'general-purpose'],
+    ['artist', 'Design the logo', 'general-purpose'],
+    ['researcher', 'Research the API', 'general-purpose'],
+    ['worker', 'Move the files', 'general-purpose'],
+    ['tester', 'Test the login', 'general-purpose'],
+    ['codex', 'Ask Codex', 'codex'],
+    ['voter', 'vote', 'general-purpose'],
+    ['scribe', 'merge', 'general-purpose'],
+    ['skeptic', 'review', 'general-purpose'],
+  ]
+  // one agent per role, the first one done, a proposer per persona and one on SPARE
+  for (const [, description, subagentType] of byRole) await $.agent.spawn({ prompt: 'go', description, subagentType } as any)
+  await $.turn.complete({ agentId: 'agent-1', answer: 'x', durationMs: 10, isAborted: false, turnId: 'agent-1', reason: 'answer' } as any)
+  const spare = 'zed'
+  expect(PERSONAS[spare]).toBeUndefined()
+  expect(SPARE).toContain(personaOf(spare).color)
+  const personas = [...Object.keys(PERSONAS), spare]
+  for (const key of personas) await $.agent.spawn({ prompt: 'go', description: `propose:${key}`, subagentType: 'general-purpose' } as any)
+
+  const props = { ...PANE, bodyColumns: 60, scroll: { offset: 0, bodyRows: 400 } }
+  for (const skin of ['crew', 'party'] as const) {
+    await $.command.run({ command: 'crew-skin', args: skin } as any)
+    for (const theme of THEMES) {
+      await setTheme($, theme)
+      const ui = await mountPane($, 'terminal', props)
+      const texts = await ui.findAll({ type: 'Text' })
+      await ui.unmount()
+      // the row's symbol always says whether it is dimmed; the ✓ mark beside a title doesn't
+      const sym = (role: PcRole) => texts.filter((t: any) => t.text === roleSymbol(role, skin) && typeof t.props.dimColor === 'boolean')
+      for (const [role] of byRole) {
+        const found = sym(role)
+        expect([skin, theme, role, found.length]).toEqual([skin, theme, role, role === 'researcher' ? 1 + personas.length : 1])
+        for (const t of found) expect(symbolReads(t.props.color, theme)).toBe(true)
+      }
+      const tones = (role: PcRole) => sym(role).map((t: any) => String(t.props.color).toUpperCase())
+      const shade = theme.startsWith('light') ? 'light' : theme.startsWith('dark') ? 'dark' : undefined
+      if (!shade) {
+        // 'auto' follows a terminal the plugin can't see: the host's own text colour
+        expect(new Set(byRole.flatMap(([r]) => tones(r)))).toEqual(new Set(['TEXT']))
+      } else {
+        // the role's or persona's own hue, at the tone that theme reads: each keeps its own
+        for (const [role] of byRole) if (role !== 'researcher') expect(tones(role)).toEqual([symbolTone(ROLES[role].color, shade).toUpperCase()])
+        expect(tones('researcher').sort()).toEqual([ROLES.researcher.color, ...personas.map(k => personaOf(k).color)].map(c => symbolTone(c, shade).toUpperCase()).sort())
+        expect(new Set(tones('researcher')).size).toBe(1 + personas.length)
+      }
+      // the finished row's symbol is dimmed, in the same readable tone; a running one isn't
+      expect(sym('developer')[0].props.dimColor).toBe(true)
+      expect(sym('artist')[0].props.dimColor).toBe(false)
+    }
+  }
+  // a colour that already reads stays as it is
+  expect(symbolTone('#F27BB5', 'dark')).toBe('#F27BB5')
+})
+
+test('the theme setting read at session start sets the symbol before anyone opens /config', EN, async ($, on) => {
+  mock.store(on, {})
+  on('command.register', () => ({ value: { command: 'x' } }))
+  on('session.start', (_$: any, e: any) => ({ cwd: e.cwd }))
+  on('config.list', () => ({ value: [{ key: 'theme', label: 'Theme', kind: 'choice', value: 'light', options: ['auto', 'dark', 'light'], provider: { kind: 'engine' }, isLocked: false }] }))
+  ;(on as any)('tool.call', { tool: 'Grep' }, async () => ({ result: 'ok', text: 'ok' }))
+  await $.session.start({ source: 'startup', cwd: '/x', surface: 'terminal', isInteractive: true } as any)
+  await ($.tool.call as any)({ tool: 'Grep', input: { pattern: 'x' } })
+  const ui = await $.ui.mount({ plugin: 'pixel-crew', surface: 'terminal', component: 'AbovePrompt', props: TBAND } as any)
+  const icon = await ui.find({ type: 'Text', text: roleSymbol('researcher') })
+  expect(icon?.props.color).toBe(symbolTone(ROLES.researcher.color, 'light'))
+  await ui.unmount()
 })
 
 test('with nobody working, quick run fills the panel; a job name shows its prompt; Run sends it', EN, async ($, on) => {

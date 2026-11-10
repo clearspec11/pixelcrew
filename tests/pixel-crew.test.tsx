@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { ALERT, ALERT_THEMED, bandRaster, barRaster, barSvg, barTones, CLAY, DARK_CARDS, fade, LIGHT_CARDS, LINE_ART, mascotPixels, mascotSvg, PARTY, ROLE_SYMBOL, ROLES, roleLabel, spritePixels, spriteRaster, spriteSvg } from '../hooks/art'
+import { ALERT, ALERT_THEMED, bandRaster, barRaster, barSvg, barTones, CLAY, DARK_CARDS, fade, LIGHT_CARDS, LINE_ART, mascotPixels, mascotSvg, PARTY, ROLE_SYMBOL, ROLES, roleLabel, spritePixels, spriteRaster, spriteSvg, symbolTone } from '../hooks/art'
 import { langOf, strings } from '../hooks/i18n'
 import { activityOf, capCrew, councilTitle, ERROR, estimate, glide, priceOf, resetGlide, roleOf, statusLine, windowOf } from '../hooks/register'
 import { parseCouncil, PERSONAS, SPARE } from '../hooks/council'
@@ -906,7 +906,9 @@ test('the terminal panel draws each subagent as pixel art, not glyphs', EN, asyn
 })
 
 test('the terminal band is one line: the mascot walks inside the bar', EN, async ($, on) => {
+  on('config.set', { key: 'theme' }, (_$: any, e: any) => ({ value: e.value }))
   await boss($, on)
+  await $.config.set({ key: 'theme', value: 'dark' })
   for (const maxRows of [10, 4]) {
     const ui = await $.ui.mount({ plugin: 'pixel-crew', surface: 'terminal', component: 'AbovePrompt', props: { ...BAND, maxRows } })
     const raster = await ui.find({ type: 'Raster' })
@@ -918,7 +920,7 @@ test('the terminal band is one line: the mascot walks inside the bar', EN, async
     expect(await ui.find({ text: /▐▛█▜▌/ })).toBeUndefined()
     const icon = await ui.find({ type: 'Text', text: /♛/ })
     expect(icon?.text).toBe('♛')
-    expect(String(icon?.props.color).toLowerCase()).toBe('#6a4be0')
+    expect(String(icon?.props.color).toLowerCase()).toBe(symbolTone('#6A4BE0', 'dark').toLowerCase())
     expect(await ui.find({ text: /1\/2/ })).toBeDefined()
     await ui.unmount()
   }
@@ -943,7 +945,9 @@ test('before any tool the band shows no symbol; a failure adds the ✗ mark', EN
 })
 
 test('the band symbol is the kind of work Claude just did, in that role\'s colour', EN, async ($, on) => {
+  on('config.set', { key: 'theme' }, (_$: any, e: any) => ({ value: e.value }))
   for (const tool of ['Edit', 'Write', 'Grep', 'Bash']) (on as any)('tool.call', { tool }, async () => ({ result: 'ok', text: 'ok' }))
+  await $.config.set({ key: 'theme', value: 'dark' })
   const symbol = async (tool: string, input: any) => {
     await ($.tool.call as any)({ tool, input })
     const ui = await $.ui.mount({ plugin: 'pixel-crew', surface: 'terminal', component: 'AbovePrompt', props: BAND })
@@ -952,23 +956,27 @@ test('the band symbol is the kind of work Claude just did, in that role\'s colou
     await ui.unmount()
     return out
   }
-  expect(await symbol('Edit', { file_path: '/x/app.ts', old_string: 'a', new_string: 'b' })).toEqual(['⌨', '#378ADD'])
-  expect(await symbol('Write', { file_path: '/x/theme.css', content: 'a{}' })).toEqual(['✎', '#D4537E'])
-  expect(await symbol('Grep', { pattern: 'x' })).toEqual(['⌕', '#B8864E'])
-  expect(await symbol('Bash', { command: 'yarn test', description: 'Run the tests' })).toEqual(['✓', '#F07A1E'])
-  expect(await symbol('Bash', { command: 'codex exec review', description: 'Ask Codex' })).toEqual(['⚡', '#10A37F'])
-  expect(await symbol('Bash', { command: 'ls', description: 'List files' })).toEqual(['⚒', '#639922'])
+  expect(await symbol('Edit', { file_path: '/x/app.ts', old_string: 'a', new_string: 'b' })).toEqual(['⌨', symbolTone('#378ADD', 'dark').toUpperCase()])
+  expect(await symbol('Write', { file_path: '/x/theme.css', content: 'a{}' })).toEqual(['✎', symbolTone('#D4537E', 'dark').toUpperCase()])
+  expect(await symbol('Grep', { pattern: 'x' })).toEqual(['⌕', symbolTone('#B8864E', 'dark').toUpperCase()])
+  expect(await symbol('Bash', { command: 'yarn test', description: 'Run the tests' })).toEqual(['✓', symbolTone('#F07A1E', 'dark').toUpperCase()])
+  expect(await symbol('Bash', { command: 'codex exec review', description: 'Ask Codex' })).toEqual(['⚡', symbolTone('#10A37F', 'dark').toUpperCase()])
+  expect(await symbol('Bash', { command: 'ls', description: 'List files' })).toEqual(['⚒', symbolTone('#639922', 'dark').toUpperCase()])
 })
 
 test('each terminal panel row shows its role symbol, greyed once finished', EN, async ($, on) => {
+  on('config.set', { key: 'theme' }, (_$: any, e: any) => ({ value: e.value }))
   await boss($, on)
+  await $.config.set({ key: 'theme', value: 'dark' })
   const ui = await $.ui.mount({ plugin: 'pixel-crew', surface: 'terminal', component: 'Pane', requestId: 'pixel-crew-agents', props: PANE } as any)
-  // 'Design the logo' is still running: the artist's brush in pink
+  // 'Design the logo' is still running: the artist's brush in pink, at the dark theme's tone
   const brush = await ui.find({ type: 'Text', text: /^✎$/ })
-  expect(String(brush?.props.color).toUpperCase()).toBe('#D4537E')
-  // 'Build the page' finished: the developer's keyboard, faded toward grey
+  expect(String(brush?.props.color).toUpperCase()).toBe(symbolTone('#D4537E', 'dark').toUpperCase())
+  expect(brush?.props.dimColor).toBeFalsy()
+  // 'Build the page' finished: the developer's keyboard, dimmed in the same readable tone
   const keys = await ui.find({ type: 'Text', text: /^⌨$/ })
-  expect(String(keys?.props.color).toUpperCase()).toBe(fade('#378ADD').toUpperCase())
+  expect(String(keys?.props.color).toUpperCase()).toBe(symbolTone('#378ADD', 'dark').toUpperCase())
+  expect(keys?.props.dimColor).toBe(true)
   await ui.unmount()
 })
 
@@ -1199,8 +1207,10 @@ test('prices and context windows follow the model', async () => {
 })
 
 test('a council agent shows its persona, stage character and colour', EN, async ($, on) => {
+  on('config.set', { key: 'theme' }, (_$: any, e: any) => ({ value: e.value }))
   let n = 0
   on('agent.spawn', async () => ({ model: 'claude-opus-5-5', agentId: 'c-' + ++n }))
+  await $.config.set({ key: 'theme', value: 'dark' })
   await $.agent.spawn({ prompt: 'p', description: 'propose:dot', subagentType: 'general-purpose' } as any)
   await $.agent.spawn({ prompt: 'p', description: 'vote:vex', subagentType: 'general-purpose' } as any)
   await $.agent.spawn({ prompt: 'p', description: 'build:P13', subagentType: 'general-purpose' } as any)
@@ -1218,8 +1228,8 @@ test('a council agent shows its persona, stage character and colour', EN, async 
     expect(voter?.props.color).toBe('text')
     expect(await ui.find({ text: 'developer' })).toBeDefined()
     if (surface === 'terminal') {
-      expect((await ui.find({ type: 'Text', text: ROLE_SYMBOL.researcher }))?.props.color).toBe(PERSONAS.dot!.color)
-      expect((await ui.find({ type: 'Text', text: ROLE_SYMBOL.voter }))?.props.color).toBe(PERSONAS.vex!.color)
+      expect((await ui.find({ type: 'Text', text: ROLE_SYMBOL.researcher }))?.props.color).toBe(symbolTone(PERSONAS.dot!.color, 'dark'))
+      expect((await ui.find({ type: 'Text', text: ROLE_SYMBOL.voter }))?.props.color).toBe(symbolTone(PERSONAS.vex!.color, 'dark'))
     }
     if (surface === 'desktop') {
       const sprites = (await ui.findAll({ type: 'Svg' })).map(s => String(s.props.source))

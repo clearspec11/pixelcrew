@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { PcActiveJob, PcAgent, PcFx, PcJob, PcMain, PcPendingJob, PcResult, PcRetired, PcRole, PcRound, PcSkin, PcTask } from '../types'
 import { ago, allJobs, findJob, hatOf, jobOfPrompt, jobPrompt, parseAdd, resultLine } from './quickrun'
-import { ALERT, ALERT_THEMED, bandRaster, barRaster, barSvg, CLAY, fade, mascotSvg, MAX_RASTER_COLUMNS, ROLES, roleLabel, roleSymbol, spriteRaster, spriteSvg } from './art'
+import { ALERT, ALERT_THEMED, bandRaster, barRaster, barSvg, CLAY, fade, mascotSvg, MAX_RASTER_COLUMNS, ROLES, roleLabel, roleSymbol, shadeOf, spriteRaster, spriteSvg, symbolTone } from './art'
 
 // terminal art budgets: the fewest columns worth drawing a band, a panel bar or
 // the text beside a sprite, and the title room the band keeps before its art
@@ -102,6 +102,9 @@ const activeJob = atom({ plugin: 'pixel-crew', key: 'activeJob' } as const, null
 // a job's prompt typed while a turn ran: it waits its turn, and turn.start makes it the active job
 const pendingJob = atom({ plugin: 'pixel-crew', key: 'pendingJob' } as const, null)
 const results = atom({ plugin: 'pixel-crew', key: 'results' } as const, {})
+// o fundo do terminal pelo tema do Claude Code ('' enquanto não se sabe, ou
+// com 'auto'): o símbolo do papel fica no 'text' até o tema dizer
+const shade = atom({ plugin: 'pixel-crew', key: 'shade' } as const, '')
 
 /** `/crew-skin party|crew`, or nothing to switch: the look asked for. */
 export function parseSkin(args: string, current: PcSkin): PcSkin {
@@ -124,7 +127,9 @@ export const ERROR = '#E24B4A'
  * The role or persona name under a row is plain text for the same reason: no
  * role or persona hex reaches 4.5:1 on both cards (Pip #B9D23C was 1.54:1 on
  * #F5F4EF), and the host has no theme key per role. Its colour stays on what
- * is drawn in it: the sprite, the symbol and the bar.
+ * is drawn in it: the sprite, the symbol and the bar. The terminal's symbol is
+ * text as well, so it takes that colour at the tone the person's theme reads
+ * (symbolTone in art.ts), or 'text' when the theme is 'auto'.
  */
 export const INK = { done: 'success', failed: 'error', active: 'text', role: 'text' } as const
 
@@ -666,6 +671,10 @@ export const register: Register = (on, options) => {
     if (savedSkin === 'party' || savedSkin === 'crew') await update($, skin, () => savedSkin)
     const savedResults = await $.store.get('results').catch(() => undefined)
     if (savedResults && typeof savedResults === 'object' && !Array.isArray(savedResults)) await update($, results, () => savedResults as Record<string, PcResult>)
+    // o tema escolhido no /config diz em que fundo o terminal desenha
+    const rows = await $.config.list().catch(() => [])
+    const theme = Array.isArray(rows) ? rows.find(r => r?.key === 'theme') : undefined
+    await update($, shade, () => shadeOf(theme?.value) ?? '')
 
     // Relógio da animação: troca o quadro 30x por segundo enquanto há agent
     // rodando ou tarefa em andamento; parado, não escreve nada.
@@ -737,6 +746,17 @@ export const register: Register = (on, options) => {
     })
 
     return next(e)
+  })
+
+  // the theme changed in /config: the role symbols follow it. The change is
+  // the person's, so this only listens: next's answer goes back untouched,
+  // and nothing here can stop it
+  on('config.set', { key: 'theme' }, async ($, e, next) => {
+    const result = await next(e)
+    try {
+      if (result && !('deny' in result)) await update($, shade, () => shadeOf(result.value) ?? '')
+    } catch {}
+    return result
   })
 
   on('command.run', { command: 'crew' }, async $ => {
@@ -1143,7 +1163,8 @@ export const register: Register = (on, options) => {
       const mood = { walk: '', jump: '✦', sleep: 'zz', alert: '!', shake: '✗' }[pose]
       const who = delegating ? 'boss' : view.role
       const icon = [who ? roleSymbol(who, look) : '', mood].filter(Boolean).join(' ')
-      const iconColor = alerting ? alertInk : shaking ? color : !who ? color : ROLES[who].color
+      // the role's hue, at the tone the person's theme reads it in, or 'text'
+      const iconColor = alerting ? alertInk : shaking ? color : !who ? color : symbolTone(ROLES[who].color, shadeOf(await read($, shade)))
       const showIcon = icon !== '' && budget >= icon.length + 1 + 1 + TITLE_MIN
       if (showIcon) budget -= icon.length + 1
       // o título (e a arte ao lado dele) ocupa o resto, menos a coluna antes da
@@ -1285,6 +1306,7 @@ export const register: Register = (on, options) => {
     const expanded = await read($, showDone)
     // the crew's look (/crew-skin): each row's label, symbol and sprite follow it
     const look = await read($, skin)
+    const termShade = shadeOf(await read($, shade))
     const els: any = $.ui.resolve(e)
     const { Box, Text, Button } = els
     const isTerm = e.surface === 'terminal'
@@ -1392,7 +1414,7 @@ export const register: Register = (on, options) => {
             <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
               <Box flexDirection="row" justifyContent="space-between" gap={1}>
                 <Box flexDirection="row" gap={1} flexShrink={1} minWidth={0} overflow="hidden">
-                  <Text color={done ? fade(tint) : tint}>{roleSymbol(a.role, look)}</Text>
+                  <Text color={symbolTone(tint, termShade)} dimColor={done}>{roleSymbol(a.role, look)}</Text>
                   {title}
                 </Box>
                 <Text color={markColor}>{mark}</Text>

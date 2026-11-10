@@ -800,6 +800,32 @@ function readable(color: string, cards: readonly string[], lighten: boolean, min
   return lighten ? '#FFFFFF' : '#000000'
 }
 
+// ── O símbolo do papel no terminal ──────────────────────────────────────
+// The terminal's role symbol is text, and no role or persona hex reaches 4.5:1
+// on both a dark and a light terminal (the two luminance ranges don't meet).
+// The host hands a ui.render no theme and no background, and has no theme key
+// per role; it does list the person's theme setting ($.config.list, 'theme').
+// So the symbol takes its role's hue at the tone that theme reads (dark: the
+// app's dark cards and #000000; light: the light cards and #FFFFFF), and the
+// host's 'text' key whenever the theme says nothing of its background ('auto'
+// follows the terminal, which the plugin can't see).
+export type TermShade = 'dark' | 'light'
+export const TERM_DARK = [...DARK_CARDS, '#000000'] as const
+export const TERM_LIGHT = [...LIGHT_CARDS] as const
+export const SYMBOL_MIN = 4.5
+
+/** Which background a Claude Code theme setting draws on: 'dark', 'light-ansi'… or unknown. */
+export function shadeOf(theme: unknown): TermShade | undefined {
+  if (typeof theme !== 'string') return undefined
+  return theme.startsWith('light') ? 'light' : theme.startsWith('dark') ? 'dark' : undefined
+}
+
+/** A role or persona colour as terminal text: its hue at 4.5:1 on that shade, or the 'text' key. */
+export function symbolTone(color: string, shade: TermShade | undefined): string {
+  if (!shade) return 'text'
+  return shade === 'dark' ? readable(color, TERM_DARK, true, SYMBOL_MIN) : readable(color, TERM_LIGHT, false, SYMBOL_MIN)
+}
+
 /** The least track alpha, from the floor up, that shows the track on every card. */
 function trackAlpha(fill: string, cards: readonly string[], floor: number): number {
   for (let a = Math.round(floor * 100); a <= 100; a++) if (worst(fill, cards, a / 100) >= TRACK_MIN) return a / 100
