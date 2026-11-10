@@ -334,24 +334,27 @@ test('a council round whose build failed says ✗ Build and "done (1 failed)" in
   }
 })
 
-// panel text on the real cards: a theme key resolved through Claude Code
-// 2.1.318's own tables (dark, light), or a hex, must reach 4.5:1 as text on both
+// panel text on the real cards: a theme key resolved the way each host paints
+// it, or a hex, must reach 4.5:1 as text on both. The terminal reads Claude Code
+// 2.1.318's theme tables. The desktop app, whose cards these are, paints the
+// keys with its own tokens (--cds-text-success, -danger and -primary, November
+// 2026; primary is 93% white and 90% black, here flattened onto the cards).
 const CARDS = { dark: '#252525', light: '#F5F4EF' }
-const THEME: Record<string, { dark: string; light: string }> = {
-  success: { dark: '#4EBA65', light: '#2C7A39' },
-  error: { dark: '#FF6B80', light: '#AB2B3F' },
-  text: { dark: '#FFFFFF', light: '#000000' },
+const THEME: Record<string, Array<{ dark: string; light: string }>> = {
+  success: [{ dark: '#4EBA65', light: '#2C7A39' }, { dark: '#53C556', light: '#006C10' }],
+  error: [{ dark: '#FF6B80', light: '#AB2B3F' }, { dark: '#F17778', light: '#A42528' }],
+  text: [{ dark: '#FFFFFF', light: '#000000' }, { dark: '#F0F0F0', light: '#181817' }],
 }
 const lum = (hex: string) => {
   const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255).map(v => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4))
   return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!
 }
 const ratio = (a: string, b: string) => (Math.max(lum(a), lum(b)) + 0.05) / (Math.min(lum(a), lum(b)) + 0.05)
-/** the weaker of the two cards; a key it doesn't know, or no colour at all, fails */
+/** the weakest of both cards and both hosts; a key it doesn't know, or no colour at all, fails */
 const textContrast = (color: unknown) => {
-  const tones = typeof color !== 'string' ? undefined : THEME[color] ?? (/^#[0-9a-f]{6}$/i.test(color) ? { dark: color, light: color } : undefined)
+  const tones = typeof color !== 'string' ? undefined : THEME[color] ?? (/^#[0-9a-f]{6}$/i.test(color) ? [{ dark: color, light: color }] : undefined)
   if (!tones) throw new Error(`not a colour this test can measure: ${String(color)}`)
-  return Math.min(ratio(tones.dark, CARDS.dark), ratio(tones.light, CARDS.light))
+  return Math.min(...tones.flatMap(t => [ratio(t.dark, CARDS.dark), ratio(t.light, CARDS.light)]))
 }
 
 test('the old literals failed on the light card; no single hex can pass on both', () => {
