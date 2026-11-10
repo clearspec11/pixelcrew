@@ -226,10 +226,18 @@ const paintOf = (source: string, theme: 'dark' | 'light') => {
   }
   return cells
 }
-const Z_AT = (frame: number) => {
-  const [x0, y0] = frame % 2 ? [13, -1] : [12, 1]
-  return ['XXXXX', '...X.', '..X..', '.X...', 'XXXXX'].flatMap((row, j) => [...row].flatMap((ch, i) => (ch === 'X' ? [`${x0 + i},${y0 + j}`] : [])))
+/** Where mascotPixels drew a mark ('!' or 'z') in this pose and frame. */
+const markAt = (mark: '!' | 'z', ...args: Parameters<typeof mascotPixels>) =>
+  mascotPixels(...args).filter(p => p.mark === mark).map(p => `${p.x},${p.y}`)
+const Z_GLYPH = ['XXXXX', '...X.', '..X..', '.X...', 'XXXXX']
+/** The cells relative to their top-left corner, so a mark that lost its shape fails. */
+const shapeOf = (at: string[]) => {
+  const xy = at.map(s => s.split(',').map(Number) as [number, number])
+  const [x0, y0] = [Math.min(...xy.map(p => p[0])), Math.min(...xy.map(p => p[1]))]
+  return xy.map(([x, y]) => `${x - x0},${y - y0}`).sort()
 }
+const Z_SHAPE = Z_GLYPH.flatMap((row, j) => [...row].flatMap((ch, i) => (ch === 'X' ? [`${i},${j}`] : []))).sort()
+const BANG_SHAPE = ['0,0', '0,1', '0,2', '0,4']
 // the scribe's quill (the vane and its highlight), also worn as the quill hat
 const FEATHER = ['0,0', '0,1', '1,1', '0,2', '1,2', '2,2', '1,3', '2,3', '1,4', '2,4', '3,4', '2,5', '3,5']
 const CARDS = { dark: [...new Set([...DARK_CARDS, '#191919'])], light: [...new Set([...LIGHT_CARDS, '#FFFFFF'])] }
@@ -257,8 +265,12 @@ test("the mascot's marks read on every card: the '!', the sleep Z, the quill and
     for (const skin of ['crew', 'party'] as const)
       for (const hat of [undefined, 'hardhat', 'lantern', 'magnifier', 'goggles', 'quill', 'broom'] as const)
         for (let f = 0; f < 40; f++) {
-          check('!', mascotSvg(role, 'alert', f, 2, true, skin, hat).source, ['17,0', '17,1', '17,2', '17,4'])
-          check('sleep Z', mascotSvg(role, 'sleep', f, 2, true, skin, hat).source, Z_AT(f))
+          const bang = markAt('!', role, 'alert', f, true, skin, hat)
+          const z = markAt('z', role, 'sleep', f, true, skin, hat)
+          expect(shapeOf(bang)).toEqual(BANG_SHAPE)
+          expect(shapeOf(z)).toEqual(Z_SHAPE)
+          check('!', mascotSvg(role, 'alert', f, 2, true, skin, hat).source, bang)
+          check('sleep Z', mascotSvg(role, 'sleep', f, 2, true, skin, hat).source, z)
           // confetti: what the jump draws with it that it does not draw without
           const bare = mascotSvg(role, 'jump', f, 2, false, skin, hat).source
           const withIt = mascotSvg(role, 'jump', f, 2, true, skin, hat).source
@@ -278,6 +290,37 @@ test("the mascot's marks read on every card: the '!', the sleep Z, the quill and
   }
 })
 
+// the "!" asks for the person, so it must be its own shape, not the tip of a
+// broom; the Z must not sit on a hat. Every other sprite pixel (gear, and the
+// body too) is either a cell away from a mark or at least 1.5:1 from it.
+test("the '!' and the sleep Z keep clear of the gear and the body in every role, skin, hat and frame", () => {
+  const bad = new Set<string>()
+  for (const role of ['clawd', 'boss'] as const)
+    for (const skin of ['crew', 'party'] as const)
+      for (const hat of [undefined, 'hardhat', 'lantern', 'magnifier', 'goggles', 'quill', 'broom'] as const)
+        for (const [pose, mark] of [['alert', '!'], ['sleep', 'z']] as const)
+          for (let f = 0; f < 40; f++) {
+            const px = mascotPixels(role, pose, f, true, skin, hat)
+            const at = new Set(px.filter(p => p.mark === mark).map(p => `${p.x},${p.y}`))
+            expect(at.size).toBe(mark === '!' ? 4 : 13)
+            const gear = new Set(px.filter(p => !p.mark).map(p => `${p.x},${p.y}`))
+            const name = `${role} ${skin} ${hat ?? 'bare'} ${pose}`
+            for (const xy of at) if (gear.has(xy)) bad.add(`${name}: ${mark} on gear at ${xy}`)
+            for (const theme of ['dark', 'light'] as const) {
+              const paint = paintOf(mascotSvg(role, pose, f, 2, true, skin, hat).source, theme)
+              for (const xy of at) {
+                const [x, y] = xy.split(',').map(Number) as [number, number]
+                for (const n of [`${x + 1},${y}`, `${x - 1},${y}`, `${x},${y + 1}`, `${x},${y - 1}`]) {
+                  if (at.has(n) || !gear.has(n)) continue
+                  const ratio = seenOn(paint.get(xy)!, paint.get(n)!)
+                  if (ratio < 1.5) bad.add(`${name} ${theme}: ${mark} at ${xy} beside ${n}, ${ratio.toFixed(2)}:1`)
+                }
+              }
+            }
+          }
+  expect([...bad]).toEqual([])
+})
+
 test('the desktop mascot paints the dark theme as the terminal does, but for the "!"', () => {
   // the dark art is mascotPixels' colours, the terminal's; only the "!" takes
   // the desktop amber of its bar and title, which the terminal draws as ALERT
@@ -287,9 +330,9 @@ test('the desktop mascot paints the dark theme as the terminal does, but for the
         for (const f of [0, 3, 7, 12, 19]) {
           const px = mascotPixels(role, pose, f, true, 'crew', hat)
           const want = new Map(px.map(p => [`${p.x},${p.y}`, p.fill]))
-          if (pose === 'alert') for (const y of [0, 1, 2, 4]) {
-            expect(want.get(`17,${y}`)).toBe(ALERT)
-            want.set(`17,${y}`, ALERT_THEMED.dark)
+          if (pose === 'alert') for (const xy of markAt('!', role, pose, f, true, 'crew', hat)) {
+            expect(want.get(xy)).toBe(ALERT)
+            want.set(xy, ALERT_THEMED.dark)
           }
           expect(Object.fromEntries(paintOf(mascotSvg(role, pose, f, 2, true, 'crew', hat).source, 'dark'))).toEqual(Object.fromEntries(want))
         }

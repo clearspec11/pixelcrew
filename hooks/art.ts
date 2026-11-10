@@ -461,7 +461,35 @@ const CONFETTI_Y = [3, 0, 5, 2, 6, 1, 4, 0, 6, 3, 2, 5]
  * quill's feather) also carries `tone`, the colour per theme the desktop SVG
  * paints instead.
  */
-export type Pixel = { x: number; y: number; fill: string; tone?: Themed }
+export type Pixel = { x: number; y: number; fill: string; tone?: Themed; mark?: '!' | 'z' }
+
+// the "!" (three pixels and a dot) and the Z as cells from their top-left corner
+const BANG_CELLS: Array<[number, number]> = [[0, 0], [0, 1], [0, 2], [0, 4]]
+const Z_CELLS = Z_GLYPH.flatMap((row, j) => [...row].flatMap((ch, i): Array<[number, number]> => (ch === 'X' ? [[i, j]] : [])))
+// where each mark may stand, best first: the "!" over the raised hand (x=17),
+// else the nearest column to its left with room, a row higher if need be; the
+// Z rising from (12,0) to (13,-1) beside the head, else still in one of them,
+// else on the open left side, away from what the hand holds up
+const BANG_SPOTS: Array<[number, number]> = [17, 16, 15, 14, 13, 12].flatMap((x): Array<[number, number]> => [[x, 0]]).concat([17, 16, 15, 14, 13, 12].map((x): [number, number] => [x, -1]))
+const Z_SPOTS: Array<Array<[number, number]>> = [
+  [[12, 0], [13, -1], [0, -1]],
+  [[13, -1], [12, 0], [0, -1]],
+]
+
+/**
+ * The first spot where the mark has a pixel of air all round: none of its
+ * cells on the sprite or 4-beside it, so it reads as its own shape and never
+ * as the tip of a broom, a lantern or a sceptre.
+ */
+function clearSpot(g: Grid, cells: Array<[number, number]>, spots: Array<[number, number]>): [number, number] {
+  const busy = (x: number, y: number) => {
+    const ch = g[y]?.[x]
+    return ch !== undefined && ch !== '.'
+  }
+  const air = ([x0, y0]: [number, number]) =>
+    cells.every(([i, j]) => [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]].every(([a, b]) => !busy(x0 + i + a!, y0 + j + b!)))
+  return spots.find(air) ?? spots[0]!
+}
 
 /**
  * Os pixels do mascote numa pose e num quadro, no quadro fixo de 18x16 (y de
@@ -479,6 +507,10 @@ export function mascotPixels(role: 'clawd' | 'boss', pose: Pose, frame = 0, conf
   if (pose === 'sleep') {
     box(g, 'X', 6, 6, 8, 8)
     box(g, 'X', 11, 11, 8, 8)
+    // o chefe cochila: a coroa escorrega um pixel para a direita e o capuz do
+    // mestre arredonda as pontas, para o Z ter um pixel de ar ao lado da cabeça
+    if (role === 'boss' && skin === 'party') dot(g, '.', [5, 3], [12, 3])
+    else if (role === 'boss') for (let y = 3; y <= 5; y++) g[y]!.splice(5, 9, '.', ...g[y]!.slice(5, 13))
   }
   if (role === 'clawd' && pose === 'alert') {
     box(g, '.', 14, 15, 9, 10)
@@ -500,7 +532,8 @@ export function mascotPixels(role: 'clawd' | 'boss', pose: Pose, frame = 0, conf
 
   const px: Pixel[] = []
   const marks = markTones()
-  const put = (x: number, y: number, fill: string, tone?: Themed) => px.push(tone ? { x, y, fill, tone } : { x, y, fill })
+  const put = (x: number, y: number, fill: string, tone?: Themed, mark?: '!' | 'z') =>
+    px.push(mark ? { x, y, fill, tone, mark } : tone ? { x, y, fill, tone } : { x, y, fill })
   g.forEach((row, r) =>
     row.forEach((ch, c) => {
       const fill = PAL[ch]
@@ -519,17 +552,17 @@ export function mascotPixels(role: 'clawd' | 'boss', pose: Pose, frame = 0, conf
       if (!body(x, y)) put(x, y, c, marks.confetti[c])
     })
   }
+  // the marks stand clear of the sprite (dx and dy are 0 in these poses)
   if (pose === 'sleep') {
-    const z = (x0: number, y0: number) =>
-      Z_GLYPH.forEach((row, j) => [...row].forEach((ch, i) => ch === 'X' && put(x0 + i, y0 + j, PAL.G!, marks.z)))
-    // o Z sobe e volta, como quem ronca
-    if (frame % 2) z(13, -1)
-    else z(12, 1)
+    // o Z sobe e volta, como quem ronca, onde houver ar para os dois lugares
+    const [x0, y0] = clearSpot(g, Z_CELLS, Z_SPOTS[frame % 2]!)
+    for (const [i, j] of Z_CELLS) put(x0 + i, y0 + j, PAL.G!, marks.z, 'z')
   }
   if (pose === 'alert') {
     // the terminal keeps ALERT, its bar's amber; the desktop paints the "!"
     // in ALERT_THEMED, the amber of its bar and title
-    for (const y of [0, 1, 2, 4]) put(17, y, PAL.Q!, ALERT_THEMED)
+    const [x0, y0] = clearSpot(g, BANG_CELLS, BANG_SPOTS)
+    for (const [i, j] of BANG_CELLS) put(x0 + i, y0 + j, PAL.Q!, ALERT_THEMED, '!')
   }
   return px
 }
