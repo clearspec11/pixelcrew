@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { PcActiveJob, PcAgent, PcFx, PcJob, PcMain, PcPendingJob, PcResult, PcRetired, PcRole, PcRound, PcSkin, PcTask } from '../types'
 import { ago, allJobs, findJob, hatOf, jobOfPrompt, jobPrompt, parseAdd, resultLine } from './quickrun'
-import { ALERT, bandRaster, barRaster, barSvg, CLAY, fade, mascotSvg, MAX_RASTER_COLUMNS, ROLES, roleLabel, roleSymbol, spriteRaster, spriteSvg } from './art'
+import { ALERT, ALERT_THEMED, bandRaster, barRaster, barSvg, CLAY, fade, mascotSvg, MAX_RASTER_COLUMNS, ROLES, roleLabel, roleSymbol, spriteRaster, spriteSvg } from './art'
 
 // terminal art budgets: the fewest columns worth drawing a band, a panel bar or
 // the text beside a sprite, and the title room the band keeps before its art
@@ -113,7 +113,16 @@ export function parseSkin(args: string, current: PcSkin): PcSkin {
 const RECENT = 3
 
 const SHAKE_MS = 1200
-const ERROR = '#E24B4A'
+export const ERROR = '#E24B4A'
+/**
+ * Panel text for done, failed and running, in the host's theme keys. No one hex
+ * reads at 4.5:1 as text on both the dark card #252525 and the light #F5F4EF
+ * (#3FB27F was 2.42:1 on light, CLAY 2.83:1), so the host picks the tone per
+ * theme ('success' is #4EBA65 on dark, #2C7A39 on light in Claude Code
+ * 2.1.318). Running is the plain text colour, bold or with ●: the host's
+ * 'claude' accent is CLAY again on light. Bars and sprites keep CLAY and ERROR.
+ */
+export const INK = { done: 'success', failed: 'error', active: 'text' } as const
 
 // A barra da faixa desliza até o progresso novo em vez de pular: a cada
 // desenho anda uma fração do que falta, pelo tempo passado (não pelo número de
@@ -1079,8 +1088,10 @@ export const register: Register = (on, options) => {
     // esperando você (permissão ou pergunta): barra e título em âmbar, e sem
     // porcentagem, que agora não importa (como na linha de status)
     const alerting = pose === 'alert'
-    // o texto usa o âmbar do tema ('warning'), não o hex da barra: #F5C542 em
-    // texto some no tema claro (1,6:1 no branco), e a chave segue o tema de quem lê
+    // o texto usa o âmbar do tema ('warning'): #F5C542 em texto some no tema
+    // claro (1,47:1 no #F5F4EF), e a chave segue o tema de quem lê. A barra do
+    // desktop usa o mesmo âmbar por tema (ALERT_THEMED, os hex que o app do
+    // desktop dá a 'warning'); o raster do terminal segue com ALERT
     const alertInk = 'warning'
 
     const color = shaking ? ERROR : alerting ? ALERT : delegating ? ROLES.boss.color : CLAY
@@ -1179,7 +1190,12 @@ export const register: Register = (on, options) => {
             <Box flexGrow={1 - ratio} flexShrink={1} />
           </Box>
           <Box overflow="hidden" justifyContent="center">
-            <Svg source={barSvg({ ratio, color, frame: f })} alt={L.altProgress(pct)} height={6} />
+            {/* esperando você, o leitor de tela ouve o mesmo título, não um % escondido */}
+            <Svg
+              source={barSvg({ ratio, color: color === ALERT ? ALERT_THEMED : color, frame: f })}
+              alt={alerting ? title : L.altProgress(pct)}
+              height={6}
+            />
           </Box>
         </Box>
         <Box flexShrink={0} flexDirection="row" gap={1} alignItems="center">
@@ -1296,7 +1312,7 @@ export const register: Register = (on, options) => {
               <Text dimColor>Steps</Text>
               {steps.map(t => (
                 <Box key={`st-${a.id}-${t.id}`} flexDirection="row" gap={1}>
-                  <Text color={t.status === 'completed' ? '#3FB27F' : t.status === 'in_progress' ? CLAY : undefined} dimColor={t.status === 'pending'}>
+                  <Text color={t.status === 'completed' ? INK.done : t.status === 'in_progress' ? INK.active : undefined} bold={t.status === 'in_progress'} dimColor={t.status === 'pending'}>
                     {t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '●' : '○'}
                   </Text>
                   <Text wrap="truncate" dimColor={t.status === 'pending'}>{t.status === 'in_progress' ? t.activeForm || t.subject : t.subject}</Text>
@@ -1313,7 +1329,7 @@ export const register: Register = (on, options) => {
               ))}
             </Box>
           )}
-          {a.status === 'failed' && <Text color={ERROR} wrap="truncate">{`Why it stopped: ${a.reason ?? 'failed'}`}</Text>}
+          {a.status === 'failed' && <Text color={INK.failed} wrap="truncate">{`Why it stopped: ${a.reason ?? 'failed'}`}</Text>}
           {!a.prompt && !steps.length && !a.recent?.length && a.status !== 'failed' && <Text dimColor>Nothing more to show yet.</Text>}
         </Box>
       )
@@ -1327,7 +1343,7 @@ export const register: Register = (on, options) => {
       const tint = persona?.color ?? info.color
       const ratio = a.status === 'failed' ? (ratioOf(a.tasks) ?? estimate(a.steps + a.tools)) : agentRatio(a)
       const { progress, phase, stats, mark, sub } = facts(a, clock)
-      const markColor = a.status === 'running' ? CLAY : a.status === 'done' ? '#3FB27F' : '#E24B4A'
+      const markColor = a.status === 'running' ? INK.active : a.status === 'done' ? INK.done : INK.failed
       // a finished agent's row goes still and grey: no sweeping glint, the role colour faded
       const done = a.status !== 'running'
       const barColor = done ? fade(tint) : tint
@@ -1423,16 +1439,16 @@ export const register: Register = (on, options) => {
           <Text bold wrap="truncate">{r ? `Council r${r.round} · ${r.mode}${r.project ? ` · ${r.project}` : ''}` : 'Council round'}</Text>
           {strip.every(s => s.state !== 'active') &&
             (strip.some(s => s.failed) ? (
-              <Text color={ERROR}>{`done (${strip.reduce((n, s) => n + s.failed, 0)} failed)`}</Text>
+              <Text color={INK.failed}>{`done (${strip.reduce((n, s) => n + s.failed, 0)} failed)`}</Text>
             ) : (
-              <Text color="#3FB27F">done</Text>
+              <Text color={INK.done}>done</Text>
             ))}
         </Box>
         <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
           {strip.map(s => (
             <Text
               key={`strip-${s.label}`}
-              color={s.state === 'active' ? CLAY : s.state === 'done' ? '#3FB27F' : s.state === 'failed' ? ERROR : undefined}
+              color={s.state === 'active' ? INK.active : s.state === 'done' ? INK.done : s.state === 'failed' ? INK.failed : undefined}
               bold={s.state === 'active'}
               dimColor={s.state === 'pending'}
             >
@@ -1490,11 +1506,11 @@ export const register: Register = (on, options) => {
       const isQueued = !isLive && busy && queued?.name === job.name
       const last = lastRuns[job.name]
       const status = isLive
-        ? { text: '● running', color: CLAY }
+        ? { text: '● running', color: INK.active }
         : isQueued
           ? { text: '○ queued', color: 'suggestion' }
           : last
-          ? { text: `${last.ok ? '✓' : '✗'} ${ago(last.at, clock)}`, color: last.ok ? '#3FB27F' : ERROR }
+          ? { text: `${last.ok ? '✓' : '✗'} ${ago(last.at, clock)}`, color: last.ok ? INK.done : INK.failed }
           : null
       return (
         <Box key={`job-${job.name}`} flexDirection="column">

@@ -3,8 +3,25 @@ import type { PcHat, PcRole, PcSkin } from '../types'
 // Paleta "Argila Claude" da barra principal
 export const CLAY = '#D97757'
 export const CLAY_LIGHT = '#E8957A'
-// o âmbar do "!" do mascote: a barra e o título quando o Claude espera você
+// o âmbar do "!" do mascote e da barra do terminal quando o Claude espera
+// você; a barra do desktop usa ALERT_THEMED, o âmbar do tema
 export const ALERT = '#F5C542'
+
+/** A colour per theme: the bar paints `dark` by default and `light` on a light card. */
+export type Themed = { dark: string; light: string }
+
+/**
+ * The desktop "needs you" bar in the amber the alert title is drawn in there,
+ * so bar and title are one amber per theme. The title names the theme key
+ * 'warning'; only the desktop app draws this SVG bar, and it paints that key
+ * with its own token --cds-text-warning: #E49C06 on dark, #794C02 on light
+ * (Claude desktop, November 2026; its older palette has #DB9300 and #734500, a
+ * shade off). Both read as they are (6.6:1 on #252525, 6.7:1 on #F5F4EF). The
+ * terminal's 'warning' is another amber (#FFC107 dark, #966C1E light in Claude
+ * Code 2.1.318), but the terminal draws a Raster in ALERT, never this bar. An
+ * SVG cannot read a theme key, so if the app changes its token this drifts.
+ */
+export const ALERT_THEMED: Themed = { dark: '#E49C06', light: '#794C02' }
 
 export type RoleInfo = { label: string; color: string; light: string }
 
@@ -520,7 +537,8 @@ export function mascotSvg(role: 'clawd' | 'boss', pose: Pose, frame = 0, px = 2,
 
 export type BarOpts = {
   ratio: number | null
-  color: string
+  /** one colour, toned per theme by barTones, or one colour for each theme */
+  color: string | Themed
   frame?: number
   /** a finished agent's bar: no sweeping glint, so every frame draws the same */
   still?: boolean
@@ -532,7 +550,8 @@ const ROWS = 2
 const TRACK = "#2A2725"
 // the desktop track is the bar's own colour, see-through, so it reads on dark
 // and light cards alike and turns red or purple with the fill; a finished
-// (faded, still) bar keeps a touch more so its track does not vanish
+// (faded, still) bar keeps a touch more so its track does not vanish. These are
+// floors: barTones raises one only until the track shows on its card.
 const TRACK_ALPHA = 0.33
 const TRACK_ALPHA_STILL = 0.35
 
@@ -548,20 +567,115 @@ export function fade(color: string): string {
   return mix(color, '#7A7F88', 0.7)
 }
 
+// ── Contraste: a barra no cartão escuro e no claro ──────────────────────
+// Os cartões reais do app: escuro #252525 (e #262624) e claro #F5F4EF.
+export const DARK_CARDS = ['#252525', '#262624'] as const
+export const LIGHT_CARDS = ['#F5F4EF'] as const
+// a little above the WCAG 3:1 for graphics, and the 1.4 a track needs, so a
+// card a shade off still passes
+const FILL_MIN = 3.1
+const TRACK_MIN = 1.45
+// the light track stays under this: an empty bar is a hint, not a slab
+const TRACK_MAX_LIGHT = 2.5
+
+const chan = (hex: string) => [16, 8, 0].map(s => (parseInt(hex.slice(1), 16) >> s) & 255)
+const lin = (v: number) => ((v /= 255) <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)
+const lumOf = (rgb: number[]) => 0.2126 * lin(rgb[0]!) + 0.7152 * lin(rgb[1]!) + 0.0722 * lin(rgb[2]!)
+const ratioOf = (a: number[], b: number[]) => {
+  const [x, y] = [lumOf(a), lumOf(b)]
+  return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05)
+}
+/** WCAG contrast of `color` at `alpha` over `card`, as the eye sees it. */
+export function contrastOn(color: string, card: string, alpha = 1): number {
+  const bg = chan(card)
+  return ratioOf(chan(color).map((v, i) => v * alpha + bg[i]! * (1 - alpha)), bg)
+}
+const worst = (color: string, cards: readonly string[], alpha = 1) => Math.min(...cards.map(c => contrastOn(color, c, alpha)))
+
+function toHsl(hex: string): [number, number, number] {
+  const [r, g, b] = chan(hex).map(v => v / 255) as [number, number, number]
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), l = (max + min) / 2
+  if (max === min) return [0, 0, l]
+  const d = max - min
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min)
+  const h = max === r ? (g - b) / d + (g < b ? 6 : 0) : max === g ? (b - r) / d + 2 : (r - g) / d + 4
+  return [h / 6, s, l]
+}
+function fromHsl(h: number, s: number, l: number): string {
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s, p = 2 * l - q
+  const f = (t: number) => {
+    t = (t + 1) % 1
+    return t < 1 / 6 ? p + (q - p) * 6 * t : t < 1 / 2 ? q : t < 2 / 3 ? p + (q - p) * (2 / 3 - t) * 6 : p
+  }
+  const ch = (v: number) => Math.round(Math.max(0, Math.min(1, v)) * 255)
+  return '#' + ((ch(f(h + 1 / 3)) << 16) | (ch(f(h)) << 8) | ch(f(h - 1 / 3))).toString(16).padStart(6, '0')
+}
+
+/**
+ * The colour itself if it already reads on the cards; else the same hue and
+ * saturation, lighter (dark cards) or darker (light cards), just until it does.
+ * Keeping the saturation is what keeps the amber amber instead of olive.
+ */
+function readable(color: string, cards: readonly string[], lighten: boolean): string {
+  if (worst(color, cards) >= FILL_MIN) return color
+  const [h, s, l0] = toHsl(color)
+  for (let i = 1; i <= 100; i++) {
+    const l = lighten ? l0 + ((1 - l0) * i) / 100 : l0 * (1 - i / 100)
+    const c = fromHsl(h, s, l)
+    if (worst(c, cards) >= FILL_MIN) return c
+  }
+  return lighten ? '#FFFFFF' : '#000000'
+}
+
+/** The least track alpha, from the floor up, that shows the track on every card. */
+function trackAlpha(fill: string, cards: readonly string[], floor: number): number {
+  for (let a = Math.round(floor * 100); a <= 100; a++) if (worst(fill, cards, a / 100) >= TRACK_MIN) return a / 100
+  return 1
+}
+
+export type BarTone = { fill: string; hi: string; glint: string; track: number }
+
+/**
+ * The bar's tones for each theme, derived from the colour passed in, so every
+ * role, persona and faded colour gets one rule instead of a hand table. Dark
+ * keeps the terminal's highlight (45% white) and glint (80%); on a light card
+ * the highlight row mixes less white, or the bar would read one pixel tall.
+ */
+export function barTones(color: string | Themed, still = false): { dark: BarTone; light: BarTone } {
+  const floor = still ? TRACK_ALPHA_STILL : TRACK_ALPHA
+  const [cd, cl] = typeof color === 'string' ? [color, color] : [color.dark, color.light]
+  const d = readable(cd, DARK_CARDS, true)
+  const l = readable(cl, LIGHT_CARDS, false)
+  let lightTrack = trackAlpha(l, LIGHT_CARDS, floor)
+  while (lightTrack > 0.05 && worst(l, LIGHT_CARDS, lightTrack) >= TRACK_MAX_LIGHT) lightTrack = Math.round(lightTrack * 100 - 1) / 100
+  return {
+    dark: { fill: d, hi: mix(d, '#FFFFFF', 0.45), glint: mix(d, '#FFFFFF', 0.8), track: trackAlpha(d, DARK_CARDS, floor) },
+    light: { fill: l, hi: mix(l, '#FFFFFF', 0.25), glint: mix(l, '#FFFFFF', 0.65), track: lightTrack },
+  }
+}
+
 /**
  * Barra de carregamento "brilho que passa", em duas linhas de pixels como a do
  * terminal: a de cima é o brilho, a de baixo o preenchimento, e um reflexo
  * diagonal de dois pixels varre a parte cheia a cada quadro. O trilho vazio é
- * a própria cor da barra, translúcida, para aparecer no tema claro e no
- * escuro. `ratio` null é uma barra indeterminada (um bloco que vai e volta).
+ * a própria cor da barra, translúcida. Cada tema tem seus tons (barTones): os
+ * atributos dos rects levam os do escuro, e um <style> com
+ * `prefers-color-scheme: light` troca para os do claro. Um renderizador que
+ * ignore o <style> desenha a barra escura de sempre. As classes levam a cor no
+ * nome, para que duas barras no mesmo documento não se pintem uma à outra.
+ * `ratio` null é uma barra indeterminada (um bloco que vai e volta).
  * Desenhada larga e sem proporção fixa, ela estica até a largura do espaço,
  * na altura que o elemento pedir.
  */
 export function barSvg({ ratio, color, frame = 0, still = false }: BarOpts): string {
-  const hi = mix(color, "#FFFFFF", 0.45)
-  const glint = mix(color, "#FFFFFF", 0.8)
-  const rect = (x: number, y: number, w: number, h: number, fill: string) =>
-    `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${fill}"/>`
+  const { dark, light } = barTones(color, still)
+  const hex = typeof color === 'string' ? color.slice(1) : `${color.dark.slice(1)}-${color.light.slice(1)}`
+  const k = `pcb-${hex.toLowerCase()}${still ? 's' : ''}`
+  const rules = (t: BarTone) =>
+    `.${k} .t{fill:${t.fill};fill-opacity:${t.track}}.${k} .f{fill:${t.fill}}.${k} .h{fill:${t.hi}}.${k} .g{fill:${t.glint}}`
+  const style = `<style>${rules(dark)}@media (prefers-color-scheme: light){${rules(light)}}</style>`
+  const rect = (x: number, y: number, w: number, h: number, cls: 'f' | 'h' | 'g') =>
+    `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${dark[cls === 'f' ? 'fill' : cls === 'h' ? 'hi' : 'glint']}" class="${cls}"/>`
 
   let from = 0
   let to = 0
@@ -575,21 +689,21 @@ export function barSvg({ ratio, color, frame = 0, still = false }: BarOpts): str
     to = Math.round(COLS * Math.max(0, Math.min(1, ratio)))
   }
 
-  let body = `<rect x="0" y="0" width="${COLS}" height="${ROWS}" fill="${color}" fill-opacity="${still ? TRACK_ALPHA_STILL : TRACK_ALPHA}"/>`
+  let body = `<rect x="0" y="0" width="${COLS}" height="${ROWS}" fill="${dark.fill}" fill-opacity="${dark.track}" class="t"/>`
   if (to > from) {
-    body += rect(from, 0, to - from, ROWS, color) + rect(from, 0, to - from, 1, hi)
+    body += rect(from, 0, to - from, ROWS, 'f') + rect(from, 0, to - from, 1, 'h')
     if (!still) {
       const period = to - from + ROWS + 8
       const x0 = from + (frame % period) - ROWS
       for (let r = 0; r < ROWS; r++) {
         const a = x0 + ROWS - 1 - r
         const b = a + 1
-        if (a >= from && a < to) body += rect(a, r, 1, 1, glint)
-        if (b >= from && b < to) body += rect(b, r, 1, 1, hi)
+        if (a >= from && a < to) body += rect(a, r, 1, 1, 'g')
+        if (b >= from && b < to) body += rect(b, r, 1, 1, 'h')
       }
     }
   }
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="2000" height="${ROWS * 3}" viewBox="0 0 ${COLS} ${ROWS}" preserveAspectRatio="none" shape-rendering="crispEdges">${body}</svg>`
+  return `<svg xmlns="http://www.w3.org/2000/svg" class="${k}" width="2000" height="${ROWS * 3}" viewBox="0 0 ${COLS} ${ROWS}" preserveAspectRatio="none" shape-rendering="crispEdges">${style}${body}</svg>`
 }
 
 // ── Terminal: pixel art in a Raster ─────────────────────────────────────
