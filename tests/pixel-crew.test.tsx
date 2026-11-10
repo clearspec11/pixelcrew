@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { ALERT, ALERT_THEMED, bandRaster, barRaster, barSvg, barTones, CLAY, DARK_CARDS, fade, LIGHT_CARDS, LINE_ART, mascotPixels, mascotSvg, PARTY, ROLE_SYMBOL, ROLES, roleLabel, spriteRaster, spriteSvg } from '../hooks/art'
+import { ALERT, ALERT_THEMED, bandRaster, barRaster, barSvg, barTones, CLAY, DARK_CARDS, fade, LIGHT_CARDS, LINE_ART, mascotPixels, mascotSvg, PARTY, ROLE_SYMBOL, ROLES, roleLabel, spritePixels, spriteRaster, spriteSvg } from '../hooks/art'
 import { langOf, strings } from '../hooks/i18n'
 import { activityOf, capCrew, councilTitle, ERROR, estimate, glide, priceOf, resetGlide, roleOf, statusLine, windowOf } from '../hooks/register'
 import { parseCouncil, PERSONAS, SPARE } from '../hooks/council'
@@ -321,21 +321,119 @@ test("the '!' and the sleep Z keep clear of the gear and the body in every role,
   expect([...bad]).toEqual([])
 })
 
+// ── Pale gear on a light card ───────────────────────────────────────────
+// What a character carries tells its role, so every pixel on the silhouette's
+// edge (one with the card on a side) must show on a light card: a white blade,
+// a cream beard, the codex's steel shell. Found by where they are drawn.
+
+/** The cells of a silhouette that have the card beside them, up, down or sideways. */
+const edgeOf = (cells: Set<string>) =>
+  [...cells].filter(xy => {
+    const [x, y] = xy.split(',').map(Number) as [number, number]
+    return [`${x + 1},${y}`, `${x - 1},${y}`, `${x},${y + 1}`, `${x},${y - 1}`].some(n => !cells.has(n))
+  })
+const ALL_HATS = [undefined, 'hardhat', 'lantern', 'magnifier', 'goggles', 'quill', 'broom'] as const
+const ALL_POSES = ['walk', 'jump', 'sleep', 'alert', 'shake'] as const
+const PANEL_ROLES = ['clawd', ...Object.keys(ROLES)] as Array<'clawd' | keyof typeof ROLES>
+
+test('every pixel on the edge of a sprite shows on a light card, in every role, skin, hat, pose and frame', () => {
+  const faint = new Set<string>()
+  let seen = 0
+  const check = (name: string, source: string, silhouette: Set<string>) => {
+    const light = paintOf(source, 'light')
+    for (const xy of edgeOf(silhouette)) {
+      seen++
+      const fill = light.get(xy)!
+      for (const card of CARDS.light) if (seenOn(fill, card) < 1.4) faint.add(`${name} at ${xy}: ${fill} ${seenOn(fill, card).toFixed(2)}:1 on ${card}`)
+    }
+  }
+  // the panel's characters, in both skins, bobbing
+  for (const skin of ['crew', 'party'] as const)
+    for (const role of PANEL_ROLES)
+      for (const f of [0, 1]) {
+        const px = spritePixels(role, true, f, undefined, skin)
+        check(`${skin} ${role}`, spriteSvg(role, 2, true, f, undefined, skin).source, new Set(px.map(p => `${p.x},${p.y}`)))
+      }
+  // the band's mascot: the body and its gear, not the marks (their own test)
+  for (const role of ['clawd', 'boss'] as const)
+    for (const skin of ['crew', 'party'] as const)
+      for (const hat of ALL_HATS)
+        for (const pose of ALL_POSES)
+          for (let f = 0; f < 40; f++) {
+            const px = mascotPixels(role, pose, f, false, skin, hat).filter(p => !p.mark)
+            check(`${role} ${skin} ${hat ?? 'bare'} ${pose} ${f}`, mascotSvg(role, pose, f, 2, false, skin, hat).source, new Set(px.map(p => `${p.x},${p.y}`)))
+          }
+  expect(seen).toBeGreaterThan(10000)
+  expect([...faint].slice(0, 10)).toEqual([])
+})
+
+test('a pale pixel framed by the sprite keeps its colour, and a toned one keeps its hue and holds still', () => {
+  const hue = (hex: string) => {
+    const [r, g, b] = [16, 8, 0].map(s => (parseInt(hex.slice(1), 16) >> s) & 255) as [number, number, number]
+    return r === g && g === b ? 'grey' : r >= b ? 'warm' : 'cool'
+  }
+  // the codex's face sits inside its shell: the shell's rim tones, its core and face do not
+  const codex = spritePixels('codex')
+  const cells = new Set(codex.map(p => `${p.x},${p.y}`))
+  const rim = new Set(edgeOf(cells))
+  const toned = codex.filter(p => p.tone && p.tone.light.toLowerCase() !== p.tone.dark.toLowerCase())
+  expect(toned.length).toBeGreaterThan(0)
+  for (const p of toned) expect(rim.has(`${p.x},${p.y}`)).toBe(true)
+  expect(codex.some(p => p.fill === '#E6E8EB' && !p.tone && !rim.has(`${p.x},${p.y}`))).toBe(true)
+  // each tone is the same hue, darker: steel stays cool, bone warm, white grey
+  // (the quill's highlight goes cream on purpose, the marks test pins it)
+  for (const skin of ['crew', 'party'] as const)
+    for (const role of PANEL_ROLES)
+      for (const p of spritePixels(role, false, 0, undefined, skin))
+        if (p.tone && !(role === 'scribe' && FEATHER.includes(`${p.x},${p.y}`))) {
+          expect({ role, dark: p.tone.dark, hue: hue(p.tone.light) }).toEqual({ role, dark: p.fill, hue: hue(p.tone.dark) })
+          expect(seenOn(p.tone.light, '#FFFFFF')).toBeGreaterThanOrEqual(seenOn(p.tone.dark, '#FFFFFF'))
+        }
+  // gear holds one tone through every frame of a pose: the bob, the steps and
+  // the shake move it, they do not re-tone it (found relative to the eye)
+  const flicker = new Set<string>()
+  for (const role of ['clawd', 'boss'] as const)
+    for (const skin of ['crew', 'party'] as const)
+      for (const hat of ALL_HATS)
+        for (const pose of ALL_POSES) {
+          const tones = new Map<string, Set<string>>()
+          for (let f = 0; f < 40; f++) {
+            const px = mascotPixels(role, pose, f, false, skin, hat)
+            const eye = px.find(p => p.fill === '#1F1410' && !px.some(q => q.fill === '#1F1410' && q.x === p.x && q.y === p.y + 1))!
+            for (const p of px) {
+              const k = `${p.x - eye.x},${p.y - eye.y}`
+              ;(tones.get(k) ?? tones.set(k, new Set()).get(k)!).add(p.tone?.light ?? p.fill)
+            }
+          }
+          for (const [k, t] of tones) if (t.size > 1 && ![...t].includes(CLAY)) flicker.add(`${role} ${skin} ${hat ?? 'bare'} ${pose} ${k}: ${[...t]}`)
+        }
+  expect([...flicker]).toEqual([])
+})
+
 test('the desktop mascot paints the dark theme as the terminal does, but for the "!"', () => {
   // the dark art is mascotPixels' colours, the terminal's; only the "!" takes
-  // the desktop amber of its bar and title, which the terminal draws as ALERT
+  // the desktop amber of its bar and title, which the terminal draws as ALERT.
+  // A pale pixel's light tone leaves its dark colour as it was.
   for (const role of ['clawd', 'boss'] as const)
-    for (const hat of [undefined, 'magnifier', 'quill'] as const)
-      for (const pose of ['walk', 'jump', 'sleep', 'alert', 'shake'] as const)
-        for (const f of [0, 3, 7, 12, 19]) {
-          const px = mascotPixels(role, pose, f, true, 'crew', hat)
-          const want = new Map(px.map(p => [`${p.x},${p.y}`, p.fill]))
-          if (pose === 'alert') for (const xy of markAt('!', role, pose, f, true, 'crew', hat)) {
-            expect(want.get(xy)).toBe(ALERT)
-            want.set(xy, ALERT_THEMED.dark)
+    for (const skin of ['crew', 'party'] as const)
+      for (const hat of ALL_HATS)
+        for (const pose of ALL_POSES)
+          for (const f of [0, 3, 7, 12, 19]) {
+            const px = mascotPixels(role, pose, f, true, skin, hat)
+            const want = new Map(px.map(p => [`${p.x},${p.y}`, p.fill]))
+            if (pose === 'alert') for (const xy of markAt('!', role, pose, f, true, skin, hat)) {
+              expect(want.get(xy)).toBe(ALERT)
+              want.set(xy, ALERT_THEMED.dark)
+            }
+            expect(Object.fromEntries(paintOf(mascotSvg(role, pose, f, 2, true, skin, hat).source, 'dark'))).toEqual(Object.fromEntries(want))
           }
-          expect(Object.fromEntries(paintOf(mascotSvg(role, pose, f, 2, true, 'crew', hat).source, 'dark'))).toEqual(Object.fromEntries(want))
-        }
+  // the panel's characters too: their dark art is their pixels' own colours
+  for (const skin of ['crew', 'party'] as const)
+    for (const role of PANEL_ROLES)
+      for (const f of [0, 1]) {
+        const want = Object.fromEntries(spritePixels(role, true, f, undefined, skin).map(p => [`${p.x},${p.y}`, p.fill]))
+        expect(Object.fromEntries(paintOf(spriteSvg(role, 2, true, f, undefined, skin).source, 'dark'))).toEqual(want)
+      }
   // a sprite with nothing to tone carries no style at all
   expect(mascotSvg('clawd', 'walk').source).not.toContain('<style>')
 })

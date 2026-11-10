@@ -406,8 +406,6 @@ export type Sprite = { source: string; width: number; height: number }
  */
 export function spriteSvg(role: PcRole | "clawd", px = 2, bob = false, frame = 0, body?: string, skin: PcSkin = "crew"): Sprite {
   const g = grid(role, skin)
-  // a council persona's colour paints the body (X) in place of the clay
-  const paint = (ch: string) => (ch === "X" && body ? body : PAL[ch])
   let top = H
   let bottom = 0
   let left = W
@@ -421,15 +419,7 @@ export function spriteSvg(role: PcRole | "clawd", px = 2, bob = false, frame = 0
       right = Math.max(right, c)
     }),
   )
-  const dy = bob && frame % 2 === 1 ? -1 : 0
-  const pixels: Pixel[] = []
-  g.forEach((row, r) =>
-    row.forEach((ch, c) => {
-      const fill = paint(ch)
-      if (fill) pixels.push({ x: c, y: r + dy, fill, tone: ch === "X" ? undefined : markTones().pal[ch] })
-    }),
-  )
-  const rects = pixelRects(pixels)
+  const rects = pixelRects(spritePixels(role, bob, frame, body, skin))
   // uma linha a mais em cima para o pulo
   const vw = right - left + 1
   const vh = bottom - top + 2
@@ -440,6 +430,22 @@ export function spriteSvg(role: PcRole | "clawd", px = 2, bob = false, frame = 0
     width,
     height,
   }
+}
+
+/** The panel character's pixels, which spriteSvg draws: the grid, bobbed. */
+export function spritePixels(role: PcRole | "clawd", bob = false, frame = 0, body?: string, skin: PcSkin = "crew"): Pixel[] {
+  const g = grid(role, skin)
+  // a council persona's colour paints the body (X) in place of the clay
+  const paint = (ch: string) => (ch === "X" && body ? body : PAL[ch])
+  const dy = bob && frame % 2 === 1 ? -1 : 0
+  const pixels: Pixel[] = []
+  g.forEach((row, r) =>
+    row.forEach((ch, c) => {
+      const fill = paint(ch)
+      if (fill) pixels.push({ x: c, y: r + dy, fill, tone: ch === "X" ? undefined : toneOf(g, c, r, ch) })
+    }),
+  )
+  return pixels
 }
 
 /**
@@ -458,8 +464,8 @@ const CONFETTI_Y = [3, 0, 5, 2, 6, 1, 4, 0, 6, 3, 2, 5]
 /**
  * One pixel of the mascot. `fill` is what the terminal Raster paints; a mark
  * that must read on a light card too (the "!", the sleep Z, the confetti, the
- * quill's feather) also carries `tone`, the colour per theme the desktop SVG
- * paints instead.
+ * quill's feather, a pale pixel on the sprite's edge) also carries `tone`, the
+ * colour per theme the desktop SVG paints instead.
  */
 export type Pixel = { x: number; y: number; fill: string; tone?: Themed; mark?: '!' | 'z' }
 
@@ -537,7 +543,7 @@ export function mascotPixels(role: 'clawd' | 'boss', pose: Pose, frame = 0, conf
   g.forEach((row, r) =>
     row.forEach((ch, c) => {
       const fill = PAL[ch]
-      if (fill) put(c + dx, r + dy, fill, marks.pal[ch])
+      if (fill) put(c + dx, r + dy, fill, toneOf(g, c, r, ch))
     }),
   )
   // o que o personagem ocupa neste quadro, para o confete passar por trás
@@ -591,18 +597,37 @@ export function mascotSvg(role: 'clawd' | 'boss', pose: Pose, frame = 0, px = 2,
  * than its vane, so the quill keeps its two tones. Computed on first use: the
  * contrast helpers are further down the file.
  */
-let markCache: { pal: Record<string, Themed>; z: Themed; confetti: Record<string, Themed> } | undefined
+let markCache: { pal: Record<string, Themed>; pale: Record<string, Themed>; z: Themed; confetti: Record<string, Themed> } | undefined
 function markTones() {
   if (markCache) return markCache
   const themed = (dark: string, min: number): Themed => ({ dark, light: readable(dark, LIGHT_CARDS, false, min) })
   const confetti: Record<string, Themed> = {}
   for (const c of CONFETTI) if (worst(c, LIGHT_CARDS) < MARK_MIN) confetti[c] = themed(c, MARK_MIN)
   const vane = themed(PAL.B!, FEATHER_MIN)
-  return (markCache = {
-    pal: { B: vane, b: { dark: PAL.b!, light: readable(PAL.N!, LIGHT_CARDS, false, MARK_MIN) } },
-    z: themed(PAL.G!, FILL_MIN),
-    confetti,
-  })
+  const pal: Record<string, Themed> = { B: vane, b: { dark: PAL.b!, light: readable(PAL.N!, LIGHT_CARDS, false, MARK_MIN) } }
+  // every other letter too pale for a light card, for the pixels on the edge (toneOf)
+  const pale: Record<string, Themed> = {}
+  for (const [ch, c] of Object.entries(PAL)) if (ch !== 'X' && !pal[ch] && worst(c, LIGHT_CARDS) < EDGE_MIN) pale[ch] = themed(c, EDGE_MIN)
+  return (markCache = { pal, pale, z: themed(PAL.G!, FILL_MIN), confetti })
+}
+
+/**
+ * A sprite pixel's colour per theme. The quill keeps its own tones (markTones);
+ * any other pale pixel with the card beside it (a cell to its side, above or
+ * below that the sprite leaves empty, or the grid's edge) goes a shade darker on
+ * a light card, in its own hue, until it shows (EDGE_MIN): steel stays cool and
+ * bone warm, and a white blade keeps its white core inside a pale grey rim. A
+ * pale pixel framed by the sprite on all four sides (the glasses, the codex's
+ * face) stays as it is. The edge is read off the grid the frame is drawn from,
+ * which a pose changes only in the body, so gear keeps one tone as it moves.
+ */
+function toneOf(g: Grid, x: number, y: number, ch: string): Themed | undefined {
+  const marks = markTones()
+  if (marks.pal[ch]) return marks.pal[ch]
+  const pale = marks.pale[ch]
+  if (!pale) return undefined
+  const open = (a: number, b: number) => (g[b]?.[a] ?? '.') === '.'
+  return open(x + 1, y) || open(x - 1, y) || open(x, y + 1) || open(x, y - 1) ? pale : undefined
 }
 
 /**
@@ -674,6 +699,9 @@ const ROW_STEP = 1.3
 // at this on every light card; the feather's vane, its outline, a step more
 const MARK_MIN = 1.5
 const FEATHER_MIN = 2
+// a pale sprite pixel on the silhouette's edge (a blade, a cap, a shell) shows
+// at this on a light card, a touch over the 1.4 a track needs
+const EDGE_MIN = 1.45
 
 const chan = (hex: string) => [16, 8, 0].map(s => (parseInt(hex.slice(1), 16) >> s) & 255)
 const lin = (v: number) => ((v /= 255) <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)
