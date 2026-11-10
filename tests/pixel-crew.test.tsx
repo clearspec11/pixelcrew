@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { ALERT, bandRaster, barRaster, barSvg, barTones, CLAY, fade, LINE_ART, mascotSvg, PARTY, ROLES, roleLabel, spriteRaster } from '../hooks/art'
+import { ALERT, ALERT_THEMED, bandRaster, barRaster, barSvg, barTones, CLAY, fade, LINE_ART, mascotSvg, PARTY, ROLES, roleLabel, spriteRaster } from '../hooks/art'
 import { langOf, strings } from '../hooks/i18n'
 import { activityOf, capCrew, councilTitle, ERROR, estimate, glide, priceOf, resetGlide, roleOf, statusLine, windowOf } from '../hooks/register'
 import { parseCouncil, PERSONAS, SPARE } from '../hooks/council'
@@ -285,13 +285,15 @@ test('a permission prompt shows on the band', PT, async ($, on) => {
   const input = { command: 'ls build' }
   await ($.tool.check as any)({ tool: 'Bash', input, tool_use_id: 'tu-1' })
   const mount = () => $.ui.mount({ plugin: 'pixel-crew', surface: 'desktop', component: 'AbovePrompt', props: BAND })
-  const barOf = async (ui: any) => String((await ui.findAll({ type: 'Svg' })).find((s: any) => /progress/i.test(String(s.props.alt)))!.props.source)
-  // waiting for you: the bar and the title turn amber, the % steps aside
+  // the bar is the 60x2 Svg; in alert its alt names the wait, not a %
+  const barOf = async (ui: any) => String((await ui.findAll({ type: 'Svg' })).find((s: any) => String(s.props.source).includes('viewBox="0 0 60 2"'))!.props.source)
+  // waiting for you: the bar and the title turn the theme's amber, the % steps aside
   let ui = await mount()
   const title = await ui.find({ type: 'Text', text: /Esperando sua permissão/ })
   expect(title).toBeDefined()
   expect(title!.props.color).toBe('warning')
-  expect(await barOf(ui)).toContain('#F5C542')
+  expect(await barOf(ui)).toContain(`.f{fill:${ALERT_THEMED.dark}}`)
+  expect(await barOf(ui)).toContain(`.f{fill:${ALERT_THEMED.light}}`)
   expect(await ui.find({ type: 'Text', text: /%/ })).toBeUndefined()
   await ui.unmount()
 
@@ -299,10 +301,47 @@ test('a permission prompt shows on the band', PT, async ($, on) => {
   await ($.tool.call as any)({ tool: 'Bash', input, tool_use_id: 'tu-1' })
   ui = await mount()
   expect(await ui.find({ text: /Esperando sua permissão/ })).toBeUndefined()
-  expect(await barOf(ui)).not.toContain('#F5C542')
+  expect(await barOf(ui)).not.toContain(ALERT_THEMED.dark)
+  expect(await barOf(ui)).not.toContain(ALERT_THEMED.light)
   expect(await ui.find({ type: 'Text', text: /^\d+%$/ })).toBeDefined()
   await ui.unmount()
 })
+
+// a screen reader hears what the band shows: waiting for you, not a % it hides
+for (const [lang, opts, waiting] of [
+  ['en', EN, 'Waiting for your permission'],
+  ['pt', PT, 'Esperando sua permissão'],
+  ['es', ES, 'Esperando tu permiso'],
+] as const)
+  test(`the waiting desktop bar's alt says it is waiting, not a percentage (${lang})`, opts, async ($, on) => {
+    resetGlide()
+    ;(on as any)('tool.call', { tool: 'TodoWrite' }, async () => ({ result: { oldTodos: [], newTodos: [] } }))
+    ;(on as any)('tool.call', { tool: 'Bash' }, async () => ({ result: 'ok', text: 'ok' }))
+    ;(on as any)('tool.check', async (_: any, e: any, next: any) => (e.tool === 'Bash' ? { decision: 'ask' } : next(e)))
+    await ($.tool.call as any)({
+      tool: 'TodoWrite',
+      input: { todos: [{ content: 'First', status: 'completed', activeForm: 'Doing the first' }, { content: 'Second', status: 'in_progress', activeForm: 'Doing the second' }] },
+    } as any)
+    const mount = () => $.ui.mount({ plugin: 'pixel-crew', surface: 'desktop', component: 'AbovePrompt', props: BAND })
+    const barAlt = async (ui: any) =>
+      String((await ui.findAll({ type: 'Svg' })).find((s: any) => String(s.props.source).includes('viewBox="0 0 60 2"'))!.props.alt)
+    const input = { command: 'ls build' }
+    await ($.tool.check as any)({ tool: 'Bash', input, tool_use_id: 'tu-1' })
+    let ui = await mount()
+    const alt = await barAlt(ui)
+    expect(alt).toBe(waiting)
+    expect(alt).not.toContain('%')
+    expect(alt).not.toMatch(/progre/i)
+    await ui.unmount()
+    // answered: the alt is the progress again, with the % the band shows
+    await ($.tool.call as any)({ tool: 'Bash', input, tool_use_id: 'tu-1' })
+    ui = await mount()
+    const back = await barAlt(ui)
+    expect(back).toMatch(/progre/i)
+    const pct = /\d+%/.exec(back)![0]
+    expect(await ui.find({ type: 'Text', text: pct })).toBeDefined()
+    await ui.unmount()
+  })
 
 test('the terminal band says it needs you in amber, without the %', EN, async ($, on) => {
   // half the list done, so the bar has a fill to colour
@@ -1055,7 +1094,7 @@ test('the desktop bar is two pixel rows with a see-through track in the bar colo
 // The party skin renames roles but keeps ROLES' colours, so its bars are the
 // same hexes; the loop goes through both skins to say so.
 const barColours = () => {
-  const out: Array<[string, string]> = [['clay', CLAY], ['alert', ALERT], ['boss', ROLES.boss.color], ['error', ERROR]]
+  const out: Array<[string, string | typeof ALERT_THEMED]> = [['clay', CLAY], ['alert', ALERT], ['alert:themed', ALERT_THEMED], ['boss', ROLES.boss.color], ['error', ERROR]]
   for (const skin of ['crew', 'party'] as const)
     for (const role of Object.keys(ROLES) as Array<keyof typeof ROLES>) {
       expect(roleLabel(role, skin)).toBe(skin === 'party' ? PARTY[role].label : ROLES[role].label)
@@ -1070,7 +1109,9 @@ test('every bar colour reads on the dark and the light card, fill and empty trac
   const bad: string[] = []
   for (const [name, base] of barColours())
     for (const still of [false, true]) {
-      const color = still ? fade(base) : base
+      // a themed colour is never faded: only finished agents' bars are still
+      if (still && typeof base !== 'string') continue
+      const color = still && typeof base === 'string' ? fade(base) : base
       const src = barSvg({ ratio: 0.4, color, still })
       const [dark, light] = src.split('@media (prefers-color-scheme: light)')
       const tones = barTones(color, still)
@@ -1101,6 +1142,22 @@ test('the light theme darkens the amber and the clay, the dark theme lifts the b
   expect(barTones(ROLES.boss.color).light.fill).toBe(ROLES.boss.color)
   // the light highlight row still reads, so the bar keeps both its rows
   for (const c of [CLAY, ALERT, ROLES.boss.color, ERROR]) expect(seenOn(barTones(c).light.hi, LIGHT)).toBeGreaterThanOrEqual(1.4)
+})
+
+// the alert title is the theme key 'warning'; the bar paints that key's own hex
+// per theme (Claude Code 2.1.318's tables), so the two are one amber
+test("the waiting bar is the theme's 'warning' amber in each theme", async () => {
+  const t = barTones(ALERT_THEMED)
+  expect(t.dark.fill).toBe('#FFC107')
+  expect(t.light.fill).toBe('#966C1E')
+  // and those read as they are: no toning needed on either card
+  expect(seenOn(t.dark.fill, DARK)).toBeGreaterThanOrEqual(3)
+  expect(seenOn(t.light.fill, LIGHT)).toBeGreaterThanOrEqual(3)
+  expect(seenOn(t.dark.fill, DARK, t.dark.track)).toBeGreaterThanOrEqual(1.4)
+  expect(seenOn(t.light.fill, LIGHT, t.light.track)).toBeGreaterThanOrEqual(1.4)
+  // its class is its own: a plain #FFC107 bar can't repaint it
+  const root = (s: string) => /<svg[^>]* class="([^"]+)"/.exec(s)![1]
+  expect(root(barSvg({ ratio: 0.5, color: ALERT_THEMED }))).not.toBe(root(barSvg({ ratio: 0.5, color: '#FFC107' })))
 })
 
 test('bars of different colours keep their styles apart', async () => {

@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { PcActiveJob, PcAgent, PcFx, PcJob, PcMain, PcPendingJob, PcResult, PcRetired, PcRole, PcRound, PcSkin, PcTask } from '../types'
 import { ago, allJobs, findJob, hatOf, jobOfPrompt, jobPrompt, parseAdd, resultLine } from './quickrun'
-import { ALERT, bandRaster, barRaster, barSvg, CLAY, fade, mascotSvg, MAX_RASTER_COLUMNS, ROLES, roleLabel, roleSymbol, spriteRaster, spriteSvg } from './art'
+import { ALERT, ALERT_THEMED, bandRaster, barRaster, barSvg, CLAY, fade, mascotSvg, MAX_RASTER_COLUMNS, ROLES, roleLabel, roleSymbol, spriteRaster, spriteSvg } from './art'
 
 // terminal art budgets: the fewest columns worth drawing a band, a panel bar or
 // the text beside a sprite, and the title room the band keeps before its art
@@ -1079,8 +1079,10 @@ export const register: Register = (on, options) => {
     // esperando você (permissão ou pergunta): barra e título em âmbar, e sem
     // porcentagem, que agora não importa (como na linha de status)
     const alerting = pose === 'alert'
-    // o texto usa o âmbar do tema ('warning'), não o hex da barra: #F5C542 em
-    // texto some no tema claro (1,6:1 no branco), e a chave segue o tema de quem lê
+    // o texto usa o âmbar do tema ('warning'): #F5C542 em texto some no tema
+    // claro (1,47:1 no #F5F4EF), e a chave segue o tema de quem lê. A barra do
+    // desktop usa o mesmo âmbar por tema (ALERT_THEMED, os hex de 'warning');
+    // o raster do terminal segue com ALERT
     const alertInk = 'warning'
 
     const color = shaking ? ERROR : alerting ? ALERT : delegating ? ROLES.boss.color : CLAY
@@ -1179,7 +1181,12 @@ export const register: Register = (on, options) => {
             <Box flexGrow={1 - ratio} flexShrink={1} />
           </Box>
           <Box overflow="hidden" justifyContent="center">
-            <Svg source={barSvg({ ratio, color, frame: f })} alt={L.altProgress(pct)} height={6} />
+            {/* esperando você, o leitor de tela ouve o mesmo título, não um % escondido */}
+            <Svg
+              source={barSvg({ ratio, color: color === ALERT ? ALERT_THEMED : color, frame: f })}
+              alt={alerting ? title : L.altProgress(pct)}
+              height={6}
+            />
           </Box>
         </Box>
         <Box flexShrink={0} flexDirection="row" gap={1} alignItems="center">

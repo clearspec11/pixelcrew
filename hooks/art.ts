@@ -3,8 +3,22 @@ import type { PcHat, PcRole, PcSkin } from '../types'
 // Paleta "Argila Claude" da barra principal
 export const CLAY = '#D97757'
 export const CLAY_LIGHT = '#E8957A'
-// o âmbar do "!" do mascote: a barra e o título quando o Claude espera você
+// o âmbar do "!" do mascote e da barra do terminal quando o Claude espera
+// você; a barra do desktop usa ALERT_THEMED, o âmbar do tema
 export const ALERT = '#F5C542'
+
+/** A colour per theme: the bar paints `dark` by default and `light` on a light card. */
+export type Themed = { dark: string; light: string }
+
+/**
+ * The desktop "needs you" bar in the host's own amber, the theme key 'warning'
+ * the alert title is drawn in, so bar and title are one amber per theme. Values
+ * from Claude Code 2.1.318's theme tables: dark warning rgb(255,193,7), light
+ * rgb(150,108,30). Both read as they are (9.4:1 on #252525, 4.3:1 on #F5F4EF).
+ * The SVG sees only prefers-color-scheme, so the colour-blind and ANSI themes
+ * (whose 'warning' is #FF9900, #FFCC00 or the terminal's yellow) get these.
+ */
+export const ALERT_THEMED: Themed = { dark: '#FFC107', light: '#966C1E' }
 
 export type RoleInfo = { label: string; color: string; light: string }
 
@@ -520,7 +534,8 @@ export function mascotSvg(role: 'clawd' | 'boss', pose: Pose, frame = 0, px = 2,
 
 export type BarOpts = {
   ratio: number | null
-  color: string
+  /** one colour, toned per theme by barTones, or one colour for each theme */
+  color: string | Themed
   frame?: number
   /** a finished agent's bar: no sweeping glint, so every frame draws the same */
   still?: boolean
@@ -623,10 +638,11 @@ export type BarTone = { fill: string; hi: string; glint: string; track: number }
  * keeps the terminal's highlight (45% white) and glint (80%); on a light card
  * the highlight row mixes less white, or the bar would read one pixel tall.
  */
-export function barTones(color: string, still = false): { dark: BarTone; light: BarTone } {
+export function barTones(color: string | Themed, still = false): { dark: BarTone; light: BarTone } {
   const floor = still ? TRACK_ALPHA_STILL : TRACK_ALPHA
-  const d = readable(color, DARK_CARDS, true)
-  const l = readable(color, LIGHT_CARDS, false)
+  const [cd, cl] = typeof color === 'string' ? [color, color] : [color.dark, color.light]
+  const d = readable(cd, DARK_CARDS, true)
+  const l = readable(cl, LIGHT_CARDS, false)
   let lightTrack = trackAlpha(l, LIGHT_CARDS, floor)
   while (lightTrack > 0.05 && worst(l, LIGHT_CARDS, lightTrack) >= TRACK_MAX_LIGHT) lightTrack = Math.round(lightTrack * 100 - 1) / 100
   return {
@@ -650,7 +666,8 @@ export function barTones(color: string, still = false): { dark: BarTone; light: 
  */
 export function barSvg({ ratio, color, frame = 0, still = false }: BarOpts): string {
   const { dark, light } = barTones(color, still)
-  const k = `pcb-${color.slice(1).toLowerCase()}${still ? 's' : ''}`
+  const hex = typeof color === 'string' ? color.slice(1) : `${color.dark.slice(1)}-${color.light.slice(1)}`
+  const k = `pcb-${hex.toLowerCase()}${still ? 's' : ''}`
   const rules = (t: BarTone) =>
     `.${k} .t{fill:${t.fill};fill-opacity:${t.track}}.${k} .f{fill:${t.fill}}.${k} .h{fill:${t.hi}}.${k} .g{fill:${t.glint}}`
   const style = `<style>${rules(dark)}@media (prefers-color-scheme: light){${rules(light)}}</style>`
