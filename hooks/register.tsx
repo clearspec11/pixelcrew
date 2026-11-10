@@ -113,7 +113,7 @@ export function parseSkin(args: string, current: PcSkin): PcSkin {
 const RECENT = 3
 
 const SHAKE_MS = 1200
-const ERROR = '#E24B4A'
+export const ERROR = '#E24B4A'
 
 // A barra da faixa desliza até o progresso novo em vez de pular: a cada
 // desenho anda uma fração do que falta, pelo tempo passado (não pelo número de

@@ -1,9 +1,9 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { bandRaster, barRaster, barSvg, CLAY, fade, LINE_ART, mascotSvg, spriteRaster } from '../hooks/art'
+import { ALERT, bandRaster, barRaster, barSvg, barTones, CLAY, fade, LINE_ART, mascotSvg, PARTY, ROLES, roleLabel, spriteRaster } from '../hooks/art'
 import { langOf, strings } from '../hooks/i18n'
-import { activityOf, capCrew, councilTitle, estimate, glide, priceOf, resetGlide, roleOf, statusLine, windowOf } from '../hooks/register'
-import { parseCouncil, PERSONAS } from '../hooks/council'
+import { activityOf, capCrew, councilTitle, ERROR, estimate, glide, priceOf, resetGlide, roleOf, statusLine, windowOf } from '../hooks/register'
+import { parseCouncil, PERSONAS, SPARE } from '../hooks/council'
 
 const BAND: any = {
   isWorking: true,
@@ -1000,7 +1000,7 @@ test('the status line says what the band says', async () => {
 // and its empty track is the bar's own colour, see-through, not a fixed dark tone.
 
 const trackOf = (src: string) => {
-  const m = /<rect x="0" y="0" width="60" height="2" fill="(#[0-9A-Fa-f]{6})" fill-opacity="([\d.]+)"\/>/.exec(src)
+  const m = /<rect x="0" y="0" width="60" height="2" fill="(#[0-9A-Fa-f]{6})" fill-opacity="([\d.]+)" class="t"\/>/.exec(src)
   expect(m).not.toBeNull()
   return { fill: m![1]!, alpha: Number(m![2]) }
 }
@@ -1013,13 +1013,14 @@ const contrast = (a: number[], b: number[]) => {
   const [x, y] = [lum(a), lum(b)]
   return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05)
 }
-/** the track as the eye sees it: its colour at its opacity over the card */
-const trackContrast = (src: string, card: string) => {
-  const { fill, alpha } = trackOf(src)
+/** a colour at an opacity over the card, as the eye sees it, against the card */
+const seenOn = (fill: string, card: string, alpha = 1) => {
   const bg = rgbOf(card)
-  const seen = rgbOf(fill).map((v, i) => v * alpha + bg[i]! * (1 - alpha))
-  return contrast(seen, bg)
+  return contrast(rgbOf(fill).map((v, i) => v * alpha + bg[i]! * (1 - alpha)), bg)
 }
+// the app's real cards
+const DARK = '#252525'
+const LIGHT = '#F5F4EF'
 
 test('the desktop band bar is 6pt tall with no fixed dark track', EN, async ($, on) => {
   const ui = await $.ui.mount({ plugin: 'pixel-crew', surface: 'desktop', component: 'AbovePrompt', props: BAND })
@@ -1034,25 +1035,81 @@ test('the desktop bar is two pixel rows with a see-through track in the bar colo
   const src = barSvg({ ratio: 0, color: CLAY })
   expect(src).not.toMatch(/#2A2725/i)
   expect(/viewBox="([^"]+)"/.exec(src)![1]).toBe('0 0 60 2')
+  // the attributes carry the dark tones, so a renderer that drops <style> draws today's bar
   const t = trackOf(src)
   expect(t.fill).toBe(CLAY)
   expect(t.alpha).toBeGreaterThanOrEqual(0.15)
-  expect(t.alpha).toBeLessThanOrEqual(0.35)
+  expect(t.alpha).toBeLessThanOrEqual(0.4)
   // the error red tints its own track
-  expect(trackOf(barSvg({ ratio: 0.4, color: '#E24B4A' })).fill).toBe('#E24B4A')
-  // a finished (still) bar keeps at least as much track
-  const done = trackOf(barSvg({ ratio: 1, color: fade('#639922'), still: true }))
-  expect(done.fill).toBe(fade('#639922'))
-  expect(done.alpha).toBeGreaterThanOrEqual(t.alpha)
-  expect(done.alpha).toBeLessThanOrEqual(0.35)
+  expect(trackOf(barSvg({ ratio: 0.4, color: ERROR })).fill).toBe(ERROR)
+  // a finished (still) bar keeps at least as much track as the same colour running
+  const green = fade('#639922')
+  const done = trackOf(barSvg({ ratio: 1, color: green, still: true }))
+  expect(done.fill).toBe(green)
+  expect(done.alpha).toBeGreaterThanOrEqual(trackOf(barSvg({ ratio: 1, color: green })).alpha)
+  expect(done.alpha).toBeLessThanOrEqual(0.4)
 })
 
-test('an empty desktop bar still shows its track on dark and light cards, without a heavy slab', async () => {
-  const src = barSvg({ ratio: 0, color: CLAY })
-  for (const card of ['#262624', '#252525', '#FFFFFF']) expect(trackContrast(src, card)).toBeGreaterThanOrEqual(1.4)
-  expect(trackContrast(src, '#FFFFFF')).toBeLessThan(3)
-  // a finished pane bar, greyed, keeps a visible track on the dark card
-  expect(trackContrast(barSvg({ ratio: 0, color: fade('#639922'), still: true }), '#252525')).toBeGreaterThanOrEqual(1.4)
+// Every colour barSvg is asked to draw: the band's (clay, amber, boss, error),
+// every role and every council persona, running and finished (faded, still).
+// The party skin renames roles but keeps ROLES' colours, so its bars are the
+// same hexes; the loop goes through both skins to say so.
+const barColours = () => {
+  const out: Array<[string, string]> = [['clay', CLAY], ['alert', ALERT], ['boss', ROLES.boss.color], ['error', ERROR]]
+  for (const skin of ['crew', 'party'] as const)
+    for (const role of Object.keys(ROLES) as Array<keyof typeof ROLES>) {
+      expect(roleLabel(role, skin)).toBe(skin === 'party' ? PARTY[role].label : ROLES[role].label)
+      out.push([`${skin}:${role}`, ROLES[role].color])
+    }
+  for (const [k, p] of Object.entries(PERSONAS)) out.push([`persona:${k}`, p.color])
+  SPARE.forEach((c, i) => out.push([`spare:${i}`, c]))
+  return out
+}
+
+test('every bar colour reads on the dark and the light card, fill and empty track', async () => {
+  const bad: string[] = []
+  for (const [name, base] of barColours())
+    for (const still of [false, true]) {
+      const color = still ? fade(base) : base
+      const src = barSvg({ ratio: 0.4, color, still })
+      const [dark, light] = src.split('@media (prefers-color-scheme: light)')
+      const tones = barTones(color, still)
+      for (const [theme, card, t, css] of [['dark', DARK, tones.dark, dark!], ['light', LIGHT, tones.light, light!]] as const) {
+        // the tones measured are the ones the svg paints in that theme
+        expect(css).toContain(`.t{fill:${t.fill};fill-opacity:${t.track}}`)
+        expect(css).toContain(`.f{fill:${t.fill}}`)
+        expect(css).toContain(`.h{fill:${t.hi}}`)
+        const fill = seenOn(t.fill, card)
+        const track = seenOn(t.fill, card, t.track)
+        const tag = `${name}${still ? ' (still)' : ''} on ${theme}`
+        if (fill < 3) bad.push(`${tag}: fill ${fill.toFixed(2)}`)
+        if (track < 1.4) bad.push(`${tag}: track ${track.toFixed(2)}`)
+        // the empty bar is a hint, not a heavy slab
+        if (theme === 'light' && track >= 3) bad.push(`${tag}: track ${track.toFixed(2)} is a slab`)
+      }
+    }
+  expect(bad).toEqual([])
+})
+
+test('the light theme darkens the amber and the clay, the dark theme lifts the boss', async () => {
+  // the 'needs you' amber was 1.47:1 on the light card, the boss 2.70:1 on dark
+  expect(barTones(ALERT).light.fill).not.toBe(ALERT)
+  expect(barTones(CLAY).light.fill).not.toBe(CLAY)
+  expect(barTones(ROLES.boss.color).dark.fill).not.toBe(ROLES.boss.color)
+  // a colour that already reads keeps its own hex
+  expect(barTones(CLAY).dark.fill).toBe(CLAY)
+  expect(barTones(ROLES.boss.color).light.fill).toBe(ROLES.boss.color)
+  // the light highlight row still reads, so the bar keeps both its rows
+  for (const c of [CLAY, ALERT, ROLES.boss.color, ERROR]) expect(seenOn(barTones(c).light.hi, LIGHT)).toBeGreaterThanOrEqual(1.4)
+})
+
+test('bars of different colours keep their styles apart', async () => {
+  const a = barSvg({ ratio: 0.5, color: CLAY })
+  const b = barSvg({ ratio: 0.5, color: CLAY, still: true })
+  const c = barSvg({ ratio: 0.5, color: ERROR })
+  const root = (s: string) => /<svg[^>]* class="([^"]+)"/.exec(s)![1]
+  expect(new Set([root(a), root(b), root(c)]).size).toBe(3)
+  for (const s of [a, b, c]) expect(s).toContain(`.${root(s)} .f{`)
 })
 
 test('the indeterminate desktop bar moves and stays inside its 60 columns', async () => {

@@ -42,7 +42,7 @@ export const PERSONAS: Record<string, Persona> = {
 }
 
 // colours for a persona not in the table, picked by a hash of its key
-const SPARE = ['#E8A33B', '#C47FD8', '#4EC4CF', '#8FBF6E', '#3D7FD4', '#D48C9E']
+export const SPARE = ['#E8A33B', '#C47FD8', '#4EC4CF', '#8FBF6E', '#3D7FD4', '#D48C9E']
 
 export type CouncilLabel = { stage: CouncilStage; persona?: string; seat?: string }
 
