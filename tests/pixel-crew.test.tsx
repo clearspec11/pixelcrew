@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { ALERT, ALERT_THEMED, bandRaster, barRaster, barSvg, barTones, CLAY, fade, LINE_ART, mascotPixels, mascotSvg, PARTY, ROLES, roleLabel, spriteRaster } from '../hooks/art'
+import { ALERT, ALERT_THEMED, bandRaster, barRaster, barSvg, barTones, CLAY, DARK_CARDS, fade, LIGHT_CARDS, LINE_ART, mascotPixels, mascotSvg, PARTY, ROLES, roleLabel, spriteRaster } from '../hooks/art'
 import { langOf, strings } from '../hooks/i18n'
 import { activityOf, capCrew, councilTitle, ERROR, estimate, glide, priceOf, resetGlide, roleOf, statusLine, windowOf } from '../hooks/register'
 import { parseCouncil, PERSONAS, SPARE } from '../hooks/council'
@@ -1115,7 +1115,12 @@ const barColours = () => {
   return out
 }
 
-test('every bar colour reads on the dark and the light card, fill and empty track', async () => {
+// The bar is two pixel rows: the top one painted .h, the bottom one .f. Both
+// rows are measured, on every card of each theme (the tests' cards and the
+// installed app's own surfaces), so neither row can slip under 3:1 unseen.
+test('every bar colour reads on the dark and the light card, both rows and empty track', async () => {
+  expect(DARK_CARDS).toEqual(expect.arrayContaining([DARK, '#262624', '#191919', '#1F1F1F']))
+  expect(LIGHT_CARDS).toEqual(expect.arrayContaining([LIGHT, '#FFFFFF']))
   const bad: string[] = []
   for (const [name, base] of barColours())
     for (const still of [false, true]) {
@@ -1125,18 +1130,25 @@ test('every bar colour reads on the dark and the light card, fill and empty trac
       const src = barSvg({ ratio: 0.4, color, still })
       const [dark, light] = src.split('@media (prefers-color-scheme: light)')
       const tones = barTones(color, still)
-      for (const [theme, card, t, css] of [['dark', DARK, tones.dark, dark!], ['light', LIGHT, tones.light, light!]] as const) {
+      for (const [theme, cards, t, css] of [['dark', DARK_CARDS, tones.dark, dark!], ['light', LIGHT_CARDS, tones.light, light!]] as const) {
         // the tones measured are the ones the svg paints in that theme
         expect(css).toContain(`.t{fill:${t.fill};fill-opacity:${t.track}}`)
         expect(css).toContain(`.f{fill:${t.fill}}`)
         expect(css).toContain(`.h{fill:${t.hi}}`)
-        const fill = seenOn(t.fill, card)
-        const track = seenOn(t.fill, card, t.track)
         const tag = `${name}${still ? ' (still)' : ''} on ${theme}`
-        if (fill < 3) bad.push(`${tag}: fill ${fill.toFixed(2)}`)
-        if (track < 1.4) bad.push(`${tag}: track ${track.toFixed(2)}`)
-        // the empty bar is a hint, not a heavy slab
-        if (theme === 'light' && track >= 3) bad.push(`${tag}: track ${track.toFixed(2)} is a slab`)
+        // a running bar is two tones, and its glint is lighter than both rows
+        if (!still && t.hi.toLowerCase() === t.fill.toLowerCase()) bad.push(`${tag}: one tone ${t.fill}`)
+        if (lum(rgbOf(t.glint)) <= Math.max(lum(rgbOf(t.hi)), lum(rgbOf(t.fill)))) bad.push(`${tag}: glint ${t.glint} not the lightest`)
+        for (const card of cards) {
+          const fill = seenOn(t.fill, card)
+          const hi = seenOn(t.hi, card)
+          const track = seenOn(t.fill, card, t.track)
+          if (fill < 3) bad.push(`${tag} ${card}: bottom row ${fill.toFixed(2)}`)
+          if (hi < 3) bad.push(`${tag} ${card}: top row ${hi.toFixed(2)}`)
+          if (track < 1.4) bad.push(`${tag} ${card}: track ${track.toFixed(2)}`)
+          // the empty bar is a hint, not a heavy slab
+          if (theme === 'light' && track >= 3) bad.push(`${tag} ${card}: track ${track.toFixed(2)} is a slab`)
+        }
       }
     }
   expect(bad).toEqual([])

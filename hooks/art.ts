@@ -568,15 +568,18 @@ export function fade(color: string): string {
 }
 
 // ── Contraste: a barra no cartão escuro e no claro ──────────────────────
-// Os cartões reais do app: escuro #252525 (e #262624) e claro #F5F4EF.
-export const DARK_CARDS = ['#252525', '#262624'] as const
-export const LIGHT_CARDS = ['#F5F4EF'] as const
+// Os cartões reais do app: escuro #252525 (e #262624) e claro #F5F4EF, mais
+// as superfícies do app instalado: #191919 e #1F1F1F no escuro, #FFFFFF no claro.
+export const DARK_CARDS = ['#252525', '#262624', '#191919', '#1F1F1F'] as const
+export const LIGHT_CARDS = ['#F5F4EF', '#FFFFFF'] as const
 // a little above the WCAG 3:1 for graphics, and the 1.4 a track needs, so a
 // card a shade off still passes
 const FILL_MIN = 3.1
 const TRACK_MIN = 1.45
 // the light track stays under this: an empty bar is a hint, not a slab
 const TRACK_MAX_LIGHT = 2.5
+// the light bar's two rows differ by at least this, so it stays two tones
+const ROW_STEP = 1.3
 
 const chan = (hex: string) => [16, 8, 0].map(s => (parseInt(hex.slice(1), 16) >> s) & 255)
 const lin = (v: number) => ((v /= 255) <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)
@@ -636,21 +639,44 @@ function trackAlpha(fill: string, cards: readonly string[], floor: number): numb
 export type BarTone = { fill: string; hi: string; glint: string; track: number }
 
 /**
+ * The two rows of the light bar. The top row is the fill lightened by up to
+ * 25% white, only as far as it still reads; where the fill sits right at the
+ * line (a colour readable() had to darken) the top row stays there and the
+ * bottom row goes darker from it instead, until the two differ by ROW_STEP.
+ * So both rows of the 6pt bar read on every light card, not just the bottom.
+ */
+function lightRows(base: string): { fill: string; hi: string } {
+  let hi = base
+  for (let i = 1; i <= 25; i++) {
+    const c = mix(base, '#FFFFFF', i / 100)
+    if (worst(c, LIGHT_CARDS) < FILL_MIN) break
+    hi = c
+  }
+  if (contrastOn(base, hi) >= ROW_STEP) return { fill: base, hi }
+  const [h, s, l0] = toHsl(hi)
+  for (let i = 1; i <= 100; i++) {
+    const c = fromHsl(h, s, l0 * (1 - i / 100))
+    if (contrastOn(c, hi) >= ROW_STEP) return { fill: c, hi }
+  }
+  return { fill: '#000000', hi }
+}
+
+/**
  * The bar's tones for each theme, derived from the colour passed in, so every
  * role, persona and faded colour gets one rule instead of a hand table. Dark
  * keeps the terminal's highlight (45% white) and glint (80%); on a light card
- * the highlight row mixes less white, or the bar would read one pixel tall.
+ * both rows have to read (lightRows), and the glint is the top row lightened.
  */
 export function barTones(color: string | Themed, still = false): { dark: BarTone; light: BarTone } {
   const floor = still ? TRACK_ALPHA_STILL : TRACK_ALPHA
   const [cd, cl] = typeof color === 'string' ? [color, color] : [color.dark, color.light]
   const d = readable(cd, DARK_CARDS, true)
-  const l = readable(cl, LIGHT_CARDS, false)
-  let lightTrack = trackAlpha(l, LIGHT_CARDS, floor)
-  while (lightTrack > 0.05 && worst(l, LIGHT_CARDS, lightTrack) >= TRACK_MAX_LIGHT) lightTrack = Math.round(lightTrack * 100 - 1) / 100
+  const l = lightRows(readable(cl, LIGHT_CARDS, false))
+  let lightTrack = trackAlpha(l.fill, LIGHT_CARDS, floor)
+  while (lightTrack > 0.05 && worst(l.fill, LIGHT_CARDS, lightTrack) >= TRACK_MAX_LIGHT) lightTrack = Math.round(lightTrack * 100 - 1) / 100
   return {
     dark: { fill: d, hi: mix(d, '#FFFFFF', 0.45), glint: mix(d, '#FFFFFF', 0.8), track: trackAlpha(d, DARK_CARDS, floor) },
-    light: { fill: l, hi: mix(l, '#FFFFFF', 0.25), glint: mix(l, '#FFFFFF', 0.65), track: lightTrack },
+    light: { fill: l.fill, hi: l.hi, glint: mix(l.hi, '#FFFFFF', 0.6), track: lightTrack },
   }
 }
 
