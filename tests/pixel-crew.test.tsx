@@ -543,6 +543,59 @@ test('a failed tool turns the bar red for a moment', EN, async ($, on) => {
   await ui.unmount()
 })
 
+// a failure and then a question inside the shake window: waiting wins, so the
+// bar, the title, the alt and the "!" all say waiting in the one amber
+test('a question asked while the bar shakes turns it amber, not red', EN, async ($, on) => {
+  resetGlide()
+  let fail = true
+  ;(on as any)('tool.call', { tool: 'Bash' }, async () => (fail ? { isError: true, result: 'boom', text: 'boom' } : { result: 'ok', text: 'ok' }))
+  ;(on as any)('tool.check', async (_: any, e: any, next: any) => (e.tool === 'Bash' ? { decision: 'ask' } : next(e)))
+  const barOf = async (ui: any) => (await ui.findAll({ type: 'Svg' })).find((s: any) => String(s.props.source).includes('viewBox="0 0 60 2"'))!
+  const desktop = () => $.ui.mount({ plugin: 'pixel-crew', surface: 'desktop', component: 'AbovePrompt', props: BAND })
+  const terminal = () => $.ui.mount({ plugin: 'pixel-crew', surface: 'terminal', component: 'AbovePrompt', props: { ...BAND, bodyColumns: 40 } })
+
+  // alone, the failure is red on both surfaces, with the ✗ beside the title
+  await ($.tool.call as any)({ tool: 'Bash', input: { command: 'exit 1', description: 'Run the build' }, tool_use_id: 'tu-1' })
+  let ui = await desktop()
+  let bar = String((await barOf(ui)).props.source)
+  expect(bar).toContain(ERROR)
+  expect(bar).not.toContain(ALERT_THEMED.dark)
+  expect(bar).not.toContain(ALERT_THEMED.light)
+  await ui.unmount()
+  ui = await terminal()
+  expect((await ui.find({ type: 'Text', text: /✗/ }))?.props.color).toBe(ERROR)
+  await ui.unmount()
+
+  // still inside the shake window, a permission is asked
+  fail = false
+  await ($.tool.check as any)({ tool: 'Bash', input: { command: 'ls build' }, tool_use_id: 'tu-2' })
+  ui = await desktop()
+  const svg = await barOf(ui)
+  bar = String(svg.props.source)
+  expect(bar).toContain(`.f{fill:${ALERT_THEMED.dark}}`)
+  expect(bar).toContain(`.f{fill:${ALERT_THEMED.light}}`)
+  expect(bar).not.toContain(ERROR)
+  const title = await ui.find({ type: 'Text', text: /Waiting for your permission/ })
+  expect(title?.props.color).toBe('warning')
+  expect(svg.props.alt).toBe('Waiting for your permission')
+  await ui.unmount()
+
+  ui = await terminal()
+  expect((await ui.find({ type: 'Text', text: /Waiting for your permission/ }))?.props.color).toBe('warning')
+  const mark = await ui.find({ type: 'Text', text: /!/ })
+  expect(mark?.props.color).toBe('warning')
+  expect(await ui.find({ type: 'Text', text: /✗/ })).toBeUndefined()
+  const raster = await ui.find({ type: 'Raster' })
+  expect(raster!.props.rows).toBe(1)
+  const colors = new Set(decodeCells(String(raster!.props.cells)).flatMap(([, fg, bg]) => [fg, bg]))
+  expect(colors.has(0xf5c542)).toBe(true)
+  expect(colors.has(0xe24b4a)).toBe(false)
+  await ui.unmount()
+
+  // the status line says the same: "!", the waiting title, no %
+  expect(statusLine({ title: 'Waiting for your permission', target: 0.4, count: '', pose: 'alert', delegating: false, shaking: true, crew: 0 })).toBe('! Waiting for your permission')
+})
+
 test('/crew-bar turns the band off and on', EN, async ($, on) => {
   // with the band off, what is beneath it (here, an empty row) draws instead
   ;(on as any)('ui.render', { component: 'AbovePrompt' }, async ($: any, e: any) => {

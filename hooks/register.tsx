@@ -1098,7 +1098,10 @@ export const register: Register = (on, options) => {
     // desktop dá a 'warning'); o raster do terminal segue com ALERT
     const alertInk = 'warning'
 
-    const color = shaking ? ERROR : alerting ? ALERT : delegating ? ROLES.boss.color : CLAY
+    // esperar você vence o tremor: uma falha seguida de uma pergunta ou
+    // permissão (dentro do SHAKE_MS) fica âmbar na barra, no título e no "!",
+    // um estado, uma cor. Sem pergunta pendente, a falha segue vermelha
+    const color = alerting ? ALERT : shaking ? ERROR : delegating ? ROLES.boss.color : CLAY
     const els: any = $.ui.resolve(e)
     const { Box, Text, Button } = els
     const openPane = () => $.ui.open({ id: PANE, title: 'Agents' }).catch(() => {})
@@ -1131,7 +1134,7 @@ export const register: Register = (on, options) => {
       const mood = { walk: '', jump: '✦', sleep: 'zz', alert: '!', shake: '✗' }[pose]
       const who = delegating ? 'boss' : view.role
       const icon = [who ? roleSymbol(who, look) : '', mood].filter(Boolean).join(' ')
-      const iconColor = shaking ? color : alerting ? alertInk : !who ? color : ROLES[who].color
+      const iconColor = alerting ? alertInk : shaking ? color : !who ? color : ROLES[who].color
       const showIcon = icon !== '' && budget >= icon.length + 1 + 1 + TITLE_MIN
       if (showIcon) budget -= icon.length + 1
       // o título (e a arte ao lado dele) ocupa o resto, menos a coluna antes da
