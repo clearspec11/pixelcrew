@@ -4,7 +4,7 @@ import type { PcHat, PcRole, PcSkin } from '../types'
 export const CLAY = '#D97757'
 export const CLAY_LIGHT = '#E8957A'
 // o âmbar do "!" do mascote e da barra do terminal quando o Claude espera
-// você; a barra do desktop usa ALERT_THEMED, o âmbar do tema
+// você; no desktop a barra e o "!" usam ALERT_THEMED, o âmbar do tema
 export const ALERT = '#F5C542'
 
 /** A colour per theme: the bar paints `dark` by default and `light` on a light card. */
@@ -89,6 +89,10 @@ const PAL: Record<string, string> = {
   c: "#B9DDF3",
   // the party skin: the ranger's greens
   T: "#3E8A3A", t: "#2C5E28",
+  // the scribe's quill: the feather's vane and its highlight, the cream and
+  // white of N and W in the dark, their own letters so the light theme can
+  // tone the feather alone (markTones) and leave the ballot and tome be
+  B: "#E8D7B5", b: "#F4F4F4",
 }
 
 const W = 18
@@ -213,8 +217,8 @@ const GEAR: Record<Exclude<PcRole, "codex">, (g: Grid) => void> = {
     }
     box(g, "W", 8, 9, 8, 8)
     eyes(g)
-    dot(g, "N", [0, 0], [0, 1], [1, 1], [0, 2], [1, 2], [2, 2], [1, 3], [2, 3], [1, 4], [2, 4], [3, 4], [2, 5], [3, 5])
-    dot(g, "W", [1, 1], [1, 2], [2, 3], [2, 4])
+    dot(g, "B", [0, 0], [0, 1], [1, 1], [0, 2], [1, 2], [2, 2], [1, 3], [2, 3], [1, 4], [2, 4], [3, 4], [2, 5], [3, 5])
+    dot(g, "b", [1, 1], [1, 2], [2, 3], [2, 4])
     box(g, "H", 3, 3, 6, 7)
     dot(g, "H", [2, 8])
     box(g, "I", 16, 17, 10, 11)
@@ -418,13 +422,14 @@ export function spriteSvg(role: PcRole | "clawd", px = 2, bob = false, frame = 0
     }),
   )
   const dy = bob && frame % 2 === 1 ? -1 : 0
-  let rects = ""
+  const pixels: Pixel[] = []
   g.forEach((row, r) =>
     row.forEach((ch, c) => {
       const fill = paint(ch)
-      if (fill) rects += `<rect x="${c}" y="${r + dy}" width="1.02" height="1.02" fill="${fill}"/>`
+      if (fill) pixels.push({ x: c, y: r + dy, fill, tone: ch === "X" ? undefined : markTones().pal[ch] })
     }),
   )
+  const rects = pixelRects(pixels)
   // uma linha a mais em cima para o pulo
   const vw = right - left + 1
   const vh = bottom - top + 2
@@ -450,7 +455,13 @@ const Z_GLYPH = ['XXXXX', '...X.', '..X..', '.X...', 'XXXXX']
 const CONFETTI_X = [0, 3, 5, 8, 10, 13, 15, 17, 1, 6, 11, 16]
 const CONFETTI_Y = [3, 0, 5, 2, 6, 1, 4, 0, 6, 3, 2, 5]
 
-export type Pixel = { x: number; y: number; fill: string }
+/**
+ * One pixel of the mascot. `fill` is what the terminal Raster paints; a mark
+ * that must read on a light card too (the "!", the sleep Z, the confetti, the
+ * quill's feather) also carries `tone`, the colour per theme the desktop SVG
+ * paints instead.
+ */
+export type Pixel = { x: number; y: number; fill: string; tone?: Themed }
 
 /**
  * Os pixels do mascote numa pose e num quadro, no quadro fixo de 18x16 (y de
@@ -482,15 +493,18 @@ export function mascotPixels(role: 'clawd' | 'boss', pose: Pose, frame = 0, conf
     box(g, 'X', 2, 2, 5, 6)
     box(g, 'X', 15, 15, 5, 6)
   }
-  const dy = pose === 'walk' ? -(step % 2) : pose === 'jump' ? -[0, 1, 2, 1][step % 4]! : 0
+  // o pulo para antes de a ponta do chapéu (a lupa, a pena) sair do quadro
+  const top = g.findIndex(row => row.some(ch => ch !== '.'))
+  const dy = pose === 'walk' ? -(step % 2) : pose === 'jump' ? Math.max(-[0, 1, 2, 1][step % 4]!, -1 - top) : 0
   const dx = pose === 'shake' ? (Math.floor(frame / 2) % 2 ? 1 : -1) : 0
 
   const px: Pixel[] = []
-  const put = (x: number, y: number, fill: string) => px.push({ x, y, fill })
+  const marks = markTones()
+  const put = (x: number, y: number, fill: string, tone?: Themed) => px.push(tone ? { x, y, fill, tone } : { x, y, fill })
   g.forEach((row, r) =>
     row.forEach((ch, c) => {
       const fill = PAL[ch]
-      if (fill) put(c + dx, r + dy, fill)
+      if (fill) put(c + dx, r + dy, fill, marks.pal[ch])
     }),
   )
   // o que o personagem ocupa neste quadro, para o confete passar por trás
@@ -501,18 +515,21 @@ export function mascotPixels(role: 'clawd' | 'boss', pose: Pose, frame = 0, conf
   if (pose === 'jump' && confetti) {
     CONFETTI_X.forEach((x, i) => {
       const y = ((fall + CONFETTI_Y[i]!) % 7) - 1
-      if (!body(x, y)) put(x, y, CONFETTI[i % CONFETTI.length]!)
+      const c = CONFETTI[i % CONFETTI.length]!
+      if (!body(x, y)) put(x, y, c, marks.confetti[c])
     })
   }
   if (pose === 'sleep') {
     const z = (x0: number, y0: number) =>
-      Z_GLYPH.forEach((row, j) => [...row].forEach((ch, i) => ch === 'X' && put(x0 + i, y0 + j, PAL.G!)))
+      Z_GLYPH.forEach((row, j) => [...row].forEach((ch, i) => ch === 'X' && put(x0 + i, y0 + j, PAL.G!, marks.z)))
     // o Z sobe e volta, como quem ronca
     if (frame % 2) z(13, -1)
     else z(12, 1)
   }
   if (pose === 'alert') {
-    for (const y of [0, 1, 2, 4]) put(17, y, PAL.Q!)
+    // the terminal keeps ALERT, its bar's amber; the desktop paints the "!"
+    // in ALERT_THEMED, the amber of its bar and title
+    for (const y of [0, 1, 2, 4]) put(17, y, PAL.Q!, ALERT_THEMED)
   }
   return px
 }
@@ -524,15 +541,55 @@ export function mascotPixels(role: 'clawd' | 'boss', pose: Pose, frame = 0, conf
  * acima da cabeça.
  */
 export function mascotSvg(role: 'clawd' | 'boss', pose: Pose, frame = 0, px = 2, confetti = true, skin: PcSkin = 'crew', hat?: PcHat): Sprite {
-  const rects = mascotPixels(role, pose, frame, confetti, skin, hat)
-    .map(p => `<rect x="${p.x}" y="${p.y}" width="1.02" height="1.02" fill="${p.fill}"/>`)
-    .join('')
+  const rects = pixelRects(mascotPixels(role, pose, frame, confetti, skin, hat))
   const vh = H + 1
   return {
     source: `<svg xmlns="http://www.w3.org/2000/svg" width="${W * px}" height="${vh * px}" viewBox="0 -1 ${W} ${vh}" shape-rendering="crispEdges">${rects}</svg>`,
     width: W * px,
     height: vh * px,
   }
+}
+
+/**
+ * The light theme's tones for the marks that carry meaning. The sleep Z reads
+ * at 3:1 like the bar; the confetti and the quill's feather are decoration and
+ * only need to show (MARK_MIN), so a pale piece goes a shade darker in its own
+ * hue and the rest keep their colour. The feather's highlight stays lighter
+ * than its vane, so the quill keeps its two tones. Computed on first use: the
+ * contrast helpers are further down the file.
+ */
+let markCache: { pal: Record<string, Themed>; z: Themed; confetti: Record<string, Themed> } | undefined
+function markTones() {
+  if (markCache) return markCache
+  const themed = (dark: string, min: number): Themed => ({ dark, light: readable(dark, LIGHT_CARDS, false, min) })
+  const confetti: Record<string, Themed> = {}
+  for (const c of CONFETTI) if (worst(c, LIGHT_CARDS) < MARK_MIN) confetti[c] = themed(c, MARK_MIN)
+  const vane = themed(PAL.B!, FEATHER_MIN)
+  return (markCache = {
+    pal: { B: vane, b: { dark: PAL.b!, light: readable(PAL.N!, LIGHT_CARDS, false, MARK_MIN) } },
+    z: themed(PAL.G!, FILL_MIN),
+    confetti,
+  })
+}
+
+/**
+ * The sprite's rects. A toned pixel takes its dark colour as the attribute and
+ * a class named after its light colour, which one @media rule swaps on a light
+ * card, as barSvg does: a renderer that ignores the <style> draws the dark art,
+ * and two sprites in one document share a class only when they share a colour.
+ */
+function pixelRects(px: Pixel[]): string {
+  const light = new Map<string, string>()
+  let rects = ''
+  for (const p of px) {
+    const t = p.tone && p.tone.light.toLowerCase() !== p.tone.dark.toLowerCase() ? p.tone : undefined
+    const k = t && `pcm-${t.light.slice(1).toLowerCase()}`
+    if (k) light.set(k, t!.light)
+    rects += `<rect x="${p.x}" y="${p.y}" width="1.02" height="1.02" fill="${p.tone?.dark ?? p.fill}"${k ? ` class="${k}"` : ''}/>`
+  }
+  if (!light.size) return rects
+  const rules = [...light].map(([k, c]) => `.${k}{fill:${c}}`).join('')
+  return `<style>@media (prefers-color-scheme: light){${rules}}</style>${rects}`
 }
 
 export type BarOpts = {
@@ -580,6 +637,10 @@ const TRACK_MIN = 1.45
 const TRACK_MAX_LIGHT = 2.5
 // the light bar's two rows differ by at least this, so it stays two tones
 const ROW_STEP = 1.3
+// a mark that is decoration (a confetti piece, the feather's highlight) shows
+// at this on every light card; the feather's vane, its outline, a step more
+const MARK_MIN = 1.5
+const FEATHER_MIN = 2
 
 const chan = (hex: string) => [16, 8, 0].map(s => (parseInt(hex.slice(1), 16) >> s) & 255)
 const lin = (v: number) => ((v /= 255) <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)
@@ -619,13 +680,13 @@ function fromHsl(h: number, s: number, l: number): string {
  * saturation, lighter (dark cards) or darker (light cards), just until it does.
  * Keeping the saturation is what keeps the amber amber instead of olive.
  */
-function readable(color: string, cards: readonly string[], lighten: boolean): string {
-  if (worst(color, cards) >= FILL_MIN) return color
+function readable(color: string, cards: readonly string[], lighten: boolean, min = FILL_MIN): string {
+  if (worst(color, cards) >= min) return color
   const [h, s, l0] = toHsl(color)
   for (let i = 1; i <= 100; i++) {
     const l = lighten ? l0 + ((1 - l0) * i) / 100 : l0 * (1 - i / 100)
     const c = fromHsl(h, s, l)
-    if (worst(c, cards) >= FILL_MIN) return c
+    if (worst(c, cards) >= min) return c
   }
   return lighten ? '#FFFFFF' : '#000000'
 }

@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { ALERT, ALERT_THEMED, bandRaster, barRaster, barSvg, barTones, CLAY, DARK_CARDS, fade, LIGHT_CARDS, LINE_ART, mascotPixels, mascotSvg, PARTY, ROLES, roleLabel, spriteRaster } from '../hooks/art'
+import { ALERT, ALERT_THEMED, bandRaster, barRaster, barSvg, barTones, CLAY, DARK_CARDS, fade, LIGHT_CARDS, LINE_ART, mascotPixels, mascotSvg, PARTY, ROLES, roleLabel, spriteRaster, spriteSvg } from '../hooks/art'
 import { langOf, strings } from '../hooks/i18n'
 import { activityOf, capCrew, councilTitle, ERROR, estimate, glide, priceOf, resetGlide, roleOf, statusLine, windowOf } from '../hooks/register'
 import { parseCouncil, PERSONAS, SPARE } from '../hooks/council'
@@ -191,9 +191,9 @@ test('the mascot keeps one size in every role, skin, hat, mood and frame', () =>
   const sizes = new Set<string>()
   // mascotSvg sizes its frame from the grid, so a taller hat can't grow the
   // band: box() drops what falls off the grid and the viewBox (rows -1 to 14)
-  // cuts what a hop lifts past it. So this also pins who leaves the frame
-  // upward. Only the magnifier's and the quill's tips do, at the top of the
-  // hop, and a hat comes off when its turn ends, before that hop.
+  // cuts what a hop lifts past it. So this also pins that nobody leaves the
+  // frame upward: a hat that reaches the grid's top row (the magnifier, the
+  // quill) hops one pixel lower instead of losing its tip.
   const cut = new Set<string>()
   for (const role of ['clawd', 'boss'] as const)
     for (const skin of ['crew', 'party'] as const)
@@ -206,7 +206,93 @@ test('the mascot keeps one size in every role, skin, hat, mood and frame', () =>
               if (mascotPixels(role, pose, f, confetti, skin, hat).some(p => p.y < -1)) cut.add(`${role} ${hat ?? 'bare'} ${pose}`)
             }
   expect([...sizes]).toEqual(['36x32'])
-  expect([...cut]).toEqual(['clawd magnifier jump', 'clawd quill jump'])
+  expect([...cut]).toEqual([])
+})
+
+// ── The mascot's marks on both cards ────────────────────────────────────
+// The sprite SVG keeps the dark colour in each rect's fill and swaps a mark's
+// tone with a class under @media (prefers-color-scheme: light). The marks are
+// found by where they are drawn, not by their class, so a mark left untoned fails.
+
+/** The colour each cell shows in a theme: the last rect drawn there wins. */
+const paintOf = (source: string, theme: 'dark' | 'light') => {
+  const light = new Map<string, string>()
+  const media = /@media \(prefers-color-scheme: light\)\{(.*?)\}<\/style>/.exec(source)?.[1] ?? ''
+  for (const [, k, c] of media.matchAll(/\.([\w-]+)\{fill:(#[0-9A-Fa-f]{6})\}/g)) light.set(k!, c!)
+  const cells = new Map<string, string>()
+  for (const [, x, y, fill, k] of source.matchAll(/<rect x="(-?\d+)" y="(-?\d+)" width="1.02" height="1.02" fill="(#[0-9A-Fa-f]{6})"(?: class="([\w-]+)")?\/>/g)) {
+    if (k) expect(light.has(k)).toBe(true)
+    cells.set(`${x},${y}`, theme === 'light' && k ? light.get(k)! : fill!)
+  }
+  return cells
+}
+const Z_AT = (frame: number) => {
+  const [x0, y0] = frame % 2 ? [13, -1] : [12, 1]
+  return ['XXXXX', '...X.', '..X..', '.X...', 'XXXXX'].flatMap((row, j) => [...row].flatMap((ch, i) => (ch === 'X' ? [`${x0 + i},${y0 + j}`] : [])))
+}
+// the scribe's quill (the vane and its highlight), also worn as the quill hat
+const FEATHER = ['0,0', '0,1', '1,1', '0,2', '1,2', '2,2', '1,3', '2,3', '1,4', '2,4', '3,4', '2,5', '3,5']
+const CARDS = { dark: [...new Set([...DARK_CARDS, '#191919'])], light: [...new Set([...LIGHT_CARDS, '#FFFFFF'])] }
+
+test("the mascot's marks read on every card: the '!', the sleep Z, the quill and the confetti", () => {
+  const worstOn = (fill: string, theme: 'dark' | 'light') => Math.min(...CARDS[theme].map(card => seenOn(fill, card)))
+  const marks: Record<string, { min: number; seen: Map<string, number> }> = {
+    '!': { min: 3, seen: new Map() },
+    'sleep Z': { min: 3, seen: new Map() },
+    quill: { min: 1.4, seen: new Map() },
+    confetti: { min: 1.4, seen: new Map() },
+  }
+  const check = (mark: string, source: string, at: string[]) => {
+    for (const theme of ['dark', 'light'] as const) {
+      const cells = paintOf(source, theme)
+      for (const xy of at) {
+        const fill = cells.get(xy)
+        expect(fill).toBeDefined()
+        if (mark === '!') expect(fill!.toUpperCase()).toBe(ALERT_THEMED[theme].toUpperCase())
+        marks[mark]!.seen.set(`${theme} ${fill}`, worstOn(fill!, theme))
+      }
+    }
+  }
+  for (const role of ['clawd', 'boss'] as const)
+    for (const skin of ['crew', 'party'] as const)
+      for (const hat of [undefined, 'hardhat', 'lantern', 'magnifier', 'goggles', 'quill', 'broom'] as const)
+        for (let f = 0; f < 40; f++) {
+          check('!', mascotSvg(role, 'alert', f, 2, true, skin, hat).source, ['17,0', '17,1', '17,2', '17,4'])
+          check('sleep Z', mascotSvg(role, 'sleep', f, 2, true, skin, hat).source, Z_AT(f))
+          // confetti: what the jump draws with it that it does not draw without
+          const bare = mascotSvg(role, 'jump', f, 2, false, skin, hat).source
+          const withIt = mascotSvg(role, 'jump', f, 2, true, skin, hat).source
+          const plain = paintOf(bare, 'dark')
+          check('confetti', withIt, [...paintOf(withIt, 'dark')].filter(([xy, c]) => plain.get(xy) !== c).map(([xy]) => xy))
+        }
+  check('quill', mascotSvg('clawd', 'walk', 0, 2, true, 'crew', 'quill').source, FEATHER)
+  check('quill', spriteSvg('scribe').source, FEATHER)
+  check('quill', spriteSvg('scribe', 2, false, 0, PERSONAS.mira!.color).source, FEATHER)
+  // every confetti colour turned up, in both themes
+  expect(marks.confetti!.seen.size).toBeGreaterThanOrEqual(12)
+  for (const [mark, { min, seen }] of Object.entries(marks)) {
+    expect(seen.size).toBeGreaterThan(1)
+    for (const [fill, ratio] of seen) expect({ mark, fill, ok: ratio >= min }).toEqual({ mark, fill, ok: true })
+  }
+})
+
+test('the desktop mascot paints the dark theme as the terminal does, but for the "!"', () => {
+  // the dark art is mascotPixels' colours, the terminal's; only the "!" takes
+  // the desktop amber of its bar and title, which the terminal draws as ALERT
+  for (const role of ['clawd', 'boss'] as const)
+    for (const hat of [undefined, 'magnifier', 'quill'] as const)
+      for (const pose of ['walk', 'jump', 'sleep', 'alert', 'shake'] as const)
+        for (const f of [0, 3, 7, 12, 19]) {
+          const px = mascotPixels(role, pose, f, true, 'crew', hat)
+          const want = new Map(px.map(p => [`${p.x},${p.y}`, p.fill]))
+          if (pose === 'alert') for (const y of [0, 1, 2, 4]) {
+            expect(want.get(`17,${y}`)).toBe(ALERT)
+            want.set(`17,${y}`, ALERT_THEMED.dark)
+          }
+          expect(Object.fromEntries(paintOf(mascotSvg(role, pose, f, 2, true, 'crew', hat).source, 'dark'))).toEqual(Object.fromEntries(want))
+        }
+  // a sprite with nothing to tone carries no style at all
+  expect(mascotSvg('clawd', 'walk').source).not.toContain('<style>')
 })
 
 test('the band speaks Portuguese', PT, async ($, on) => {
