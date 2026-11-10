@@ -193,7 +193,8 @@ test('the mascot keeps one size in every role, skin, hat, mood and frame', () =>
   // band: box() drops what falls off the grid and the viewBox (rows -1 to 14)
   // cuts what a hop lifts past it. So this also pins that nobody leaves the
   // frame upward: a hat that reaches the grid's top row (the magnifier, the
-  // quill) hops one pixel lower instead of losing its tip.
+  // quill) hops one pixel lower instead of losing its tip. The same holds
+  // sideways (columns 0 to 17): the shake never moves gear past the edge.
   const cut = new Set<string>()
   for (const role of ['clawd', 'boss'] as const)
     for (const skin of ['crew', 'party'] as const)
@@ -203,10 +204,24 @@ test('the mascot keeps one size in every role, skin, hat, mood and frame', () =>
             for (let f = 0; f < 40; f++) {
               const s = mascotSvg(role, pose, f, 2, confetti, skin, hat)
               sizes.add(`${s.width}x${s.height}`)
-              if (mascotPixels(role, pose, f, confetti, skin, hat).some(p => p.y < -1)) cut.add(`${role} ${hat ?? 'bare'} ${pose}`)
+              if (mascotPixels(role, pose, f, confetti, skin, hat).some(p => p.y < -1 || p.x < 0 || p.x > 17)) cut.add(`${role} ${skin} ${hat ?? 'bare'} ${pose}`)
             }
   expect([...sizes]).toEqual(['36x32'])
   expect([...cut]).toEqual([])
+})
+
+// kept inside the frame, the shake must still read as a shake: the body moves
+test('the shake still moves the body in every role, skin and hat', () => {
+  const still: string[] = []
+  for (const role of ['clawd', 'boss'] as const)
+    for (const skin of ['crew', 'party'] as const)
+      for (const hat of [undefined, 'hardhat', 'lantern', 'magnifier', 'goggles', 'quill', 'broom'] as const) {
+        const clay = (f: number) => new Set(mascotPixels(role, 'shake', f, true, skin, hat).filter(p => p.fill === CLAY).map(p => `${p.x},${p.y}`))
+        const [a, b] = [clay(0), clay(2)]
+        expect(a.size).toBeGreaterThan(0)
+        if ([...a].every(k => b.has(k)) && a.size === b.size) still.push(`${role} ${skin} ${hat ?? 'bare'}`)
+      }
+  expect(still).toEqual([])
 })
 
 // ── The mascot's marks on both cards ────────────────────────────────────
@@ -390,18 +405,21 @@ test('a pale pixel framed by the sprite keeps its colour, and a toned one keeps 
           expect(seenOn(p.tone.light, '#FFFFFF')).toBeGreaterThanOrEqual(seenOn(p.tone.dark, '#FFFFFF'))
         }
   // gear holds one tone through every frame of a pose: the bob, the steps and
-  // the shake move it, they do not re-tone it (found relative to the eye)
+  // the shake move it, they do not re-tone it (found relative to the eye, or
+  // to the frame for gear the shake holds still at the edge, like the quill's)
   const flicker = new Set<string>()
   for (const role of ['clawd', 'boss'] as const)
     for (const skin of ['crew', 'party'] as const)
       for (const hat of ALL_HATS)
         for (const pose of ALL_POSES) {
           const tones = new Map<string, Set<string>>()
-          for (let f = 0; f < 40; f++) {
-            const px = mascotPixels(role, pose, f, false, skin, hat)
+          const frames = Array.from({ length: 40 }, (_, f) => mascotPixels(role, pose, f, false, skin, hat))
+          const at = (p: ReturnType<typeof mascotPixels>[number]) => `${p.x},${p.y},${p.fill},${p.tone?.light}`
+          const still = new Set(frames[0]!.map(at).filter(k => frames.every(px => px.some(p => at(p) === k))))
+          for (const px of frames) {
             const eye = px.find(p => p.fill === '#1F1410' && !px.some(q => q.fill === '#1F1410' && q.x === p.x && q.y === p.y + 1))!
             for (const p of px) {
-              const k = `${p.x - eye.x},${p.y - eye.y}`
+              const k = pose === 'shake' && still.has(at(p)) ? `@${p.x},${p.y}` : `${p.x - eye.x},${p.y - eye.y}`
               ;(tones.get(k) ?? tones.set(k, new Set()).get(k)!).add(p.tone?.light ?? p.fill)
             }
           }
@@ -690,9 +708,12 @@ test('a failed tool turns the bar red for a moment', EN, async ($, on) => {
 // bar, the title, the alt and the "!" all say waiting in the one amber
 test('a question asked while the bar shakes turns it amber, not red', EN, async ($, on) => {
   resetGlide()
+  // the shake window (1.2 s) runs on this clock, not the machine's
+  const clock = mock.clock(on, { now: 1_000 })
   let fail = true
+  let ask = true
   ;(on as any)('tool.call', { tool: 'Bash' }, async () => (fail ? { isError: true, result: 'boom', text: 'boom' } : { result: 'ok', text: 'ok' }))
-  ;(on as any)('tool.check', async (_: any, e: any, next: any) => (e.tool === 'Bash' ? { decision: 'ask' } : next(e)))
+  ;(on as any)('tool.check', async (_: any, e: any, next: any) => (e.tool === 'Bash' && ask ? { decision: 'ask' } : next(e)))
   const barOf = async (ui: any) => (await ui.findAll({ type: 'Svg' })).find((s: any) => String(s.props.source).includes('viewBox="0 0 60 2"'))!
   const desktop = () => $.ui.mount({ plugin: 'pixel-crew', surface: 'desktop', component: 'AbovePrompt', props: BAND })
   const terminal = () => $.ui.mount({ plugin: 'pixel-crew', surface: 'terminal', component: 'AbovePrompt', props: { ...BAND, bodyColumns: 40 } })
@@ -707,6 +728,12 @@ test('a question asked while the bar shakes turns it amber, not red', EN, async 
   await ui.unmount()
   ui = await terminal()
   expect((await ui.find({ type: 'Text', text: /✗/ }))?.props.color).toBe(ERROR)
+  await ui.unmount()
+
+  // 0.6 s later the window is still open: alone, the bar is still red
+  await clock.advance(600)
+  ui = await desktop()
+  expect(String((await barOf(ui)).props.source)).toContain(ERROR)
   await ui.unmount()
 
   // still inside the shake window, a permission is asked
@@ -737,6 +764,20 @@ test('a question asked while the bar shakes turns it amber, not red', EN, async 
 
   // the status line says the same: "!", the waiting title, no %
   expect(statusLine({ title: 'Waiting for your permission', target: 0.4, count: '', pose: 'alert', delegating: false, shaking: true, crew: 0 })).toBe('! Waiting for your permission')
+
+  // past the window, with the permission answered: neither red nor amber
+  await clock.advance(1_000)
+  ask = false
+  await ($.tool.call as any)({ tool: 'Bash', input: { command: 'ls build' }, tool_use_id: 'tu-2' })
+  ui = await desktop()
+  bar = String((await barOf(ui)).props.source)
+  expect(bar).not.toContain(ERROR)
+  expect(bar).not.toContain(ALERT_THEMED.dark)
+  expect(bar).not.toContain(ALERT_THEMED.light)
+  await ui.unmount()
+  ui = await terminal()
+  expect(await ui.find({ type: 'Text', text: /Waiting for your permission/ })).toBeUndefined()
+  await ui.unmount()
 })
 
 test('/crew-bar turns the band off and on', EN, async ($, on) => {

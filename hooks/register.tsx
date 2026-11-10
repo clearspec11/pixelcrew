@@ -147,6 +147,12 @@ export function glide(target: number, t = Date.now()): number {
   return shown
 }
 
+/**
+ * The time on the engine's clock, which a test can mock, else the machine's:
+ * the shake and the celebration windows are set and read by it.
+ */
+const nowOf = ($: EngineInterface) => $.clock.now().catch(() => Date.now())
+
 /** Esquece onde a barra estava: o próximo desenho vai direto ao progresso. */
 export function resetGlide() {
   shown = -1
@@ -520,7 +526,7 @@ async function isBusy($: EngineInterface): Promise<boolean> {
  * band draws it; the status line (for the mobile app, which draws no band)
  * says it in one line. `appWorking` is the app's own word that a turn runs.
  */
-async function bandView($: EngineInterface, appWorking: boolean, t = Date.now()): Promise<BandView | null> {
+async function bandView($: EngineInterface, appWorking: boolean, t: number): Promise<BandView | null> {
   const list = await read($, tasks)
   const crew = await read($, agents)
   // the ×N button counts the agents the panel's totals count: its rows and the ones folded off them
@@ -610,7 +616,7 @@ async function updateStatus($: EngineInterface) {
   let text: string | undefined
   const councilRound = (await $.state.get(councilBand as never)).value as CouncilBand
   if ((await read($, bandOn)) && !(councilRound && !councilRound.isFinished)) {
-    const view = await bandView($, false)
+    const view = await bandView($, false, await nowOf($))
     if (view) text = statusLine(view, await read($, skin))
   }
   if (text !== undefined && !(await $.session.surfaces()).includes('mobile')) text = undefined
@@ -676,7 +682,7 @@ export const register: Register = (on, options) => {
         const list2 = await read($, tasks)
         const working = (await read($, main)).working || list2.some(t => t.status === 'in_progress')
         const effects = await read($, fx)
-        const t0 = Date.now()
+        const t0 = await nowOf($)
         // comemoração, tremida e a barra deslizando também animam; com um
         // quadro a mais no fim, para a faixa sumir quando a comemoração acaba
         const band = await read($, bandOn)
@@ -971,10 +977,11 @@ export const register: Register = (on, options) => {
         await $.store.set('results', kept).catch(() => {})
       }
       const crewBusy = (await read($, agents).catch(() => [] as PcAgent[])).some(a => a.status === 'running')
+      const t = await nowOf($)
       await update($, fx, f => ({
         ...f,
         asking: null,
-        celebrateUntil: ok && !crewBusy && celebration !== 'off' ? Date.now() + CELEBRATE[celebration] : 0,
+        celebrateUntil: ok && !crewBusy && celebration !== 'off' ? t + CELEBRATE[celebration] : 0,
       })).catch(() => {})
     }
     return next(e)
@@ -1036,8 +1043,9 @@ export const register: Register = (on, options) => {
     // respondida (ou recusada) a pergunta ou a permissão, o "!" sai; uma
     // ferramenta do agent principal que falhou faz o mascote tremer
     const failed = !agentId && (r as any).isError === true
+    const t = await nowOf($)
     await update($, fx, f =>
-      f.asking || failed ? { ...f, asking: null, errorUntil: failed ? Date.now() + SHAKE_MS : f.errorUntil } : f,
+      f.asking || failed ? { ...f, asking: null, errorUntil: failed ? t + SHAKE_MS : f.errorUntil } : f,
     ).catch(() => {})
     if (!agentId) {
       await update($, main, m => (m.working ? { ...m, activity: L.thinking } : m)).catch(() => {})
@@ -1079,7 +1087,8 @@ export const register: Register = (on, options) => {
     const councilRound = (await $.state.get(councilBand as never)).value as CouncilBand
     if (councilRound && !councilRound.isFinished && !(await $.state.get(councilBandHidden as never)).value) return next(e)
     if (e.props.hasSurvey) return next(e)
-    const t = Date.now()
+    // the effect windows (shake, celebration) run on the engine's clock
+    const t = await nowOf($)
     const view = await bandView($, e.props.isWorking, t)
     if (!view) return next(e)
     const { title, count, pose, delegating, shaking } = view

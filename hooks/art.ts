@@ -498,6 +498,45 @@ function clearSpot(g: Grid, cells: Array<[number, number]>, spots: Array<[number
 }
 
 /**
+ * How far a shake moves the sprite without anything leaving the frame's
+ * columns 0 to 17: `want` (one pixel left or right) when the whole sprite fits
+ * there, else 0 when it fits the other way (the shake swings between the
+ * middle and the free side). When neither side has a free column (the quill's
+ * feather at 0, its ink pot at 17), the body still moves by `want` and `held`
+ * names the gear cells that hold still in every frame: each piece of gear
+ * (cells that differ from the bare Clawd, joined side by side) that touches
+ * column 0 or 17.
+ */
+function shakeOf(g: Grid, want: number): { dx: number; held: Set<string> } {
+  const held = new Set<string>()
+  if (!want) return { dx: 0, held }
+  const cols = g.flatMap(row => row.flatMap((ch, c) => (ch !== '.' ? [c] : [])))
+  const fits = (d: number) => Math.min(...cols) + d >= 0 && Math.max(...cols) + d <= W - 1
+  if (fits(want)) return { dx: want, held }
+  if (fits(-want)) return { dx: 0, held }
+  const bare = grid('clawd')
+  const gear = (x: number, y: number) => (g[y]?.[x] ?? '.') !== '.' && g[y]![x] !== bare[y]![x]
+  const seen = new Set<string>()
+  g.forEach((row, r) =>
+    row.forEach((_, c) => {
+      if (!gear(c, r) || seen.has(`${c},${r}`)) return
+      // one piece: the gear cells joined to this one
+      const piece: Array<[number, number]> = []
+      const todo: Array<[number, number]> = [[c, r]]
+      seen.add(`${c},${r}`)
+      while (todo.length) {
+        const [x, y] = todo.pop()!
+        piece.push([x, y])
+        for (const [a, b] of [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]] as Array<[number, number]>)
+          if (gear(a, b) && !seen.has(`${a},${b}`)) seen.add(`${a},${b}`), todo.push([a, b])
+      }
+      if (piece.some(([x]) => x === 0 || x === W - 1)) for (const [x, y] of piece) held.add(`${x},${y}`)
+    }),
+  )
+  return { dx: want, held }
+}
+
+/**
  * Os pixels do mascote numa pose e num quadro, no quadro fixo de 18x16 (y de
  * -1 a 14): o SVG da faixa e o Raster do terminal desenham os mesmos.
  */
@@ -534,18 +573,27 @@ export function mascotPixels(role: 'clawd' | 'boss', pose: Pose, frame = 0, conf
   // o pulo para antes de a ponta do chapéu (a lupa, a pena) sair do quadro
   const top = g.findIndex(row => row.some(ch => ch !== '.'))
   const dy = pose === 'walk' ? -(step % 2) : pose === 'jump' ? Math.max(-[0, 1, 2, 1][step % 4]!, -1 - top) : 0
-  const dx = pose === 'shake' ? (Math.floor(frame / 2) % 2 ? 1 : -1) : 0
+  // o tremor: um pixel para cada lado, sem nada sair do quadro pelas colunas
+  // 0 e 17. Sem espaço de um lado, alterna entre o centro e o lado livre; sem
+  // espaço dos dois (a pena e o tinteiro), o corpo treme e a peça na borda
+  // fica parada
+  const want = pose === 'shake' ? (Math.floor(frame / 2) % 2 ? 1 : -1) : 0
+  const { dx, held } = shakeOf(g, want)
 
   const px: Pixel[] = []
   const marks = markTones()
   const put = (x: number, y: number, fill: string, tone?: Themed, mark?: '!' | 'z') =>
     px.push(mark ? { x, y, fill, tone, mark } : tone ? { x, y, fill, tone } : { x, y, fill })
-  g.forEach((row, r) =>
-    row.forEach((ch, c) => {
-      const fill = PAL[ch]
-      if (fill) put(c + dx, r + dy, fill, toneOf(g, c, r, ch))
-    }),
-  )
+  // the body first, then any held gear on top of where it slid
+  for (const still of [false, true])
+    g.forEach((row, r) =>
+      row.forEach((ch, c) => {
+        const fill = PAL[ch]
+        if (!fill || held.has(`${c},${r}`) !== still) return
+        if (!still && held.has(`${c + dx},${r}`)) return
+        put(still ? c : c + dx, r + dy, fill, toneOf(g, c, r, ch))
+      }),
+    )
   // o que o personagem ocupa neste quadro, para o confete passar por trás
   const body = (x: number, y: number) => {
     const ch = g[y - dy]?.[x - dx]
