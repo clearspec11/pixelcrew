@@ -336,6 +336,29 @@ test("the '!' and the sleep Z keep clear of the gear and the body in every role,
   expect([...bad]).toEqual([])
 })
 
+// keeping clear must not cost the marks their place: with nothing in the way
+// the "!" stays over the raised hand and the Z still rises as Clawd snores,
+// and in every outfit a mark holds its place instead of hopping about
+test("the bare Clawd keeps its '!' over the hand and its rising Z, and no outfit's mark wanders", () => {
+  const corner = (at: string[]) => {
+    const xy = at.map(s => s.split(',').map(Number) as [number, number])
+    return `${Math.min(...xy.map(p => p[0]))},${Math.min(...xy.map(p => p[1]))}`
+  }
+  for (const skin of ['crew', 'party'] as const) {
+    expect(markAt('!', 'clawd', 'alert', 0, true, skin)).toEqual(['17,0', '17,1', '17,2', '17,4'])
+    expect(corner(markAt('z', 'clawd', 'sleep', 0, true, skin))).toBe('12,0')
+    expect(corner(markAt('z', 'clawd', 'sleep', 1, true, skin))).toBe('13,-1')
+  }
+  for (const role of ['clawd', 'boss'] as const)
+    for (const skin of ['crew', 'party'] as const)
+      for (const hat of [undefined, 'hardhat', 'lantern', 'magnifier', 'goggles', 'quill', 'broom'] as const) {
+        const frames = Array.from({ length: 40 }, (_, f) => f)
+        // the "!" stands still; the Z has one place per beat of the snore
+        expect(new Set(frames.map(f => corner(markAt('!', role, 'alert', f, true, skin, hat)))).size).toBe(1)
+        for (const beat of [0, 1]) expect(new Set(frames.filter(f => f % 2 === beat).map(f => corner(markAt('z', role, 'sleep', f, true, skin, hat)))).size).toBe(1)
+      }
+})
+
 // ── Pale gear on a light card ───────────────────────────────────────────
 // What a character carries tells its role, so every pixel on the silhouette's
 // edge (one with the card on a side) must show on a light card: a white blade,

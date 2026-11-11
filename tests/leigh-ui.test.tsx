@@ -635,6 +635,33 @@ test('the theme setting read at session start sets the symbol before anyone open
   await ui.unmount()
 })
 
+// a symbol toned for the wrong background is worse than plain text (a dark
+// theme's tone is about 3:1 on white), so the symbol must follow every theme
+// change that was written and no change that was refused
+test('the symbol follows a written theme change however the answer is spelled, and ignores a refused one', EN, async ($, on) => {
+  mock.store(on, {})
+  on('command.register', () => ({ value: { command: 'x' } }))
+  ;(on as any)('tool.call', { tool: 'Grep' }, async () => ({ result: 'ok', text: 'ok' }))
+  // the writer beneath: ConfigSetResult allows `deny: undefined` beside the value
+  let refuse = false
+  on('config.set', { key: 'theme' }, (_$: any, e: any) => (refuse ? { deny: 'locked by policy' } : { value: e.value, deny: undefined }))
+  await ($.tool.call as any)({ tool: 'Grep', input: { pattern: 'x' } })
+  const tone = async () => {
+    const ui = await $.ui.mount({ plugin: 'pixel-crew', surface: 'terminal', component: 'AbovePrompt', props: TBAND } as any)
+    const icon = await ui.find({ type: 'Text', text: roleSymbol('researcher') })
+    await ui.unmount()
+    return icon?.props.color
+  }
+  await setTheme($, 'dark')
+  expect(await tone()).toBe(symbolTone(ROLES.researcher.color, 'dark'))
+  await setTheme($, 'light')
+  expect(await tone()).toBe(symbolTone(ROLES.researcher.color, 'light'))
+  // refused: the theme is still light, and so is the symbol
+  refuse = true
+  expect((await setTheme($, 'dark')).deny).toBe('locked by policy')
+  expect(await tone()).toBe(symbolTone(ROLES.researcher.color, 'light'))
+})
+
 test('with nobody working, quick run fills the panel; a job name shows its prompt; Run sends it', EN, async ($, on) => {
   const sent: string[] = []
   on('prompt.submit', async (_$: any, e: any) => {
