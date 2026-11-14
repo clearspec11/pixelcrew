@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { ALERT, ALERT_THEMED, bandRaster, barRaster, barSvg, barTones, CLAY, DARK_CARDS, fade, LIGHT_CARDS, LINE_ART, mascotPixels, mascotSvg, PARTY, ROLE_SYMBOL, ROLES, roleLabel, spriteRaster, spriteSvg } from '../hooks/art'
+import { ALERT, ALERT_THEMED, bandRaster, barRaster, barSvg, barTones, CLAY, DARK_CARDS, fade, LIGHT_CARDS, LINE_ART, mascotPixels, mascotSvg, PARTY, ROLE_SYMBOL, ROLES, roleLabel, spritePixels, spriteRaster, spriteSvg, symbolTone } from '../hooks/art'
 import { langOf, strings } from '../hooks/i18n'
 import { activityOf, capCrew, councilTitle, ERROR, estimate, glide, priceOf, resetGlide, roleOf, statusLine, windowOf } from '../hooks/register'
 import { parseCouncil, PERSONAS, SPARE } from '../hooks/council'
@@ -193,7 +193,8 @@ test('the mascot keeps one size in every role, skin, hat, mood and frame', () =>
   // band: box() drops what falls off the grid and the viewBox (rows -1 to 14)
   // cuts what a hop lifts past it. So this also pins that nobody leaves the
   // frame upward: a hat that reaches the grid's top row (the magnifier, the
-  // quill) hops one pixel lower instead of losing its tip.
+  // quill) hops one pixel lower instead of losing its tip. The same holds
+  // sideways (columns 0 to 17): the shake never moves gear past the edge.
   const cut = new Set<string>()
   for (const role of ['clawd', 'boss'] as const)
     for (const skin of ['crew', 'party'] as const)
@@ -203,10 +204,24 @@ test('the mascot keeps one size in every role, skin, hat, mood and frame', () =>
             for (let f = 0; f < 40; f++) {
               const s = mascotSvg(role, pose, f, 2, confetti, skin, hat)
               sizes.add(`${s.width}x${s.height}`)
-              if (mascotPixels(role, pose, f, confetti, skin, hat).some(p => p.y < -1)) cut.add(`${role} ${hat ?? 'bare'} ${pose}`)
+              if (mascotPixels(role, pose, f, confetti, skin, hat).some(p => p.y < -1 || p.x < 0 || p.x > 17)) cut.add(`${role} ${skin} ${hat ?? 'bare'} ${pose}`)
             }
   expect([...sizes]).toEqual(['36x32'])
   expect([...cut]).toEqual([])
+})
+
+// kept inside the frame, the shake must still read as a shake: the body moves
+test('the shake still moves the body in every role, skin and hat', () => {
+  const still: string[] = []
+  for (const role of ['clawd', 'boss'] as const)
+    for (const skin of ['crew', 'party'] as const)
+      for (const hat of [undefined, 'hardhat', 'lantern', 'magnifier', 'goggles', 'quill', 'broom'] as const) {
+        const clay = (f: number) => new Set(mascotPixels(role, 'shake', f, true, skin, hat).filter(p => p.fill === CLAY).map(p => `${p.x},${p.y}`))
+        const [a, b] = [clay(0), clay(2)]
+        expect(a.size).toBeGreaterThan(0)
+        if ([...a].every(k => b.has(k)) && a.size === b.size) still.push(`${role} ${skin} ${hat ?? 'bare'}`)
+      }
+  expect(still).toEqual([])
 })
 
 // ── The mascot's marks on both cards ────────────────────────────────────
@@ -226,10 +241,18 @@ const paintOf = (source: string, theme: 'dark' | 'light') => {
   }
   return cells
 }
-const Z_AT = (frame: number) => {
-  const [x0, y0] = frame % 2 ? [13, -1] : [12, 1]
-  return ['XXXXX', '...X.', '..X..', '.X...', 'XXXXX'].flatMap((row, j) => [...row].flatMap((ch, i) => (ch === 'X' ? [`${x0 + i},${y0 + j}`] : [])))
+/** Where mascotPixels drew a mark ('!' or 'z') in this pose and frame. */
+const markAt = (mark: '!' | 'z', ...args: Parameters<typeof mascotPixels>) =>
+  mascotPixels(...args).filter(p => p.mark === mark).map(p => `${p.x},${p.y}`)
+const Z_GLYPH = ['XXXXX', '...X.', '..X..', '.X...', 'XXXXX']
+/** The cells relative to their top-left corner, so a mark that lost its shape fails. */
+const shapeOf = (at: string[]) => {
+  const xy = at.map(s => s.split(',').map(Number) as [number, number])
+  const [x0, y0] = [Math.min(...xy.map(p => p[0])), Math.min(...xy.map(p => p[1]))]
+  return xy.map(([x, y]) => `${x - x0},${y - y0}`).sort()
 }
+const Z_SHAPE = Z_GLYPH.flatMap((row, j) => [...row].flatMap((ch, i) => (ch === 'X' ? [`${i},${j}`] : []))).sort()
+const BANG_SHAPE = ['0,0', '0,1', '0,2', '0,4']
 // the scribe's quill (the vane and its highlight), also worn as the quill hat
 const FEATHER = ['0,0', '0,1', '1,1', '0,2', '1,2', '2,2', '1,3', '2,3', '1,4', '2,4', '3,4', '2,5', '3,5']
 const CARDS = { dark: [...new Set([...DARK_CARDS, '#191919'])], light: [...new Set([...LIGHT_CARDS, '#FFFFFF'])] }
@@ -257,8 +280,12 @@ test("the mascot's marks read on every card: the '!', the sleep Z, the quill and
     for (const skin of ['crew', 'party'] as const)
       for (const hat of [undefined, 'hardhat', 'lantern', 'magnifier', 'goggles', 'quill', 'broom'] as const)
         for (let f = 0; f < 40; f++) {
-          check('!', mascotSvg(role, 'alert', f, 2, true, skin, hat).source, ['17,0', '17,1', '17,2', '17,4'])
-          check('sleep Z', mascotSvg(role, 'sleep', f, 2, true, skin, hat).source, Z_AT(f))
+          const bang = markAt('!', role, 'alert', f, true, skin, hat)
+          const z = markAt('z', role, 'sleep', f, true, skin, hat)
+          expect(shapeOf(bang)).toEqual(BANG_SHAPE)
+          expect(shapeOf(z)).toEqual(Z_SHAPE)
+          check('!', mascotSvg(role, 'alert', f, 2, true, skin, hat).source, bang)
+          check('sleep Z', mascotSvg(role, 'sleep', f, 2, true, skin, hat).source, z)
           // confetti: what the jump draws with it that it does not draw without
           const bare = mascotSvg(role, 'jump', f, 2, false, skin, hat).source
           const withIt = mascotSvg(role, 'jump', f, 2, true, skin, hat).source
@@ -278,21 +305,176 @@ test("the mascot's marks read on every card: the '!', the sleep Z, the quill and
   }
 })
 
+// the "!" asks for the person, so it must be its own shape, not the tip of a
+// broom; the Z must not sit on a hat. Every other sprite pixel (gear, and the
+// body too) is either a cell away from a mark or at least 1.5:1 from it.
+test("the '!' and the sleep Z keep clear of the gear and the body in every role, skin, hat and frame", () => {
+  const bad = new Set<string>()
+  for (const role of ['clawd', 'boss'] as const)
+    for (const skin of ['crew', 'party'] as const)
+      for (const hat of [undefined, 'hardhat', 'lantern', 'magnifier', 'goggles', 'quill', 'broom'] as const)
+        for (const [pose, mark] of [['alert', '!'], ['sleep', 'z']] as const)
+          for (let f = 0; f < 40; f++) {
+            const px = mascotPixels(role, pose, f, true, skin, hat)
+            const at = new Set(px.filter(p => p.mark === mark).map(p => `${p.x},${p.y}`))
+            expect(at.size).toBe(mark === '!' ? 4 : 13)
+            const gear = new Set(px.filter(p => !p.mark).map(p => `${p.x},${p.y}`))
+            const name = `${role} ${skin} ${hat ?? 'bare'} ${pose}`
+            for (const xy of at) if (gear.has(xy)) bad.add(`${name}: ${mark} on gear at ${xy}`)
+            for (const theme of ['dark', 'light'] as const) {
+              const paint = paintOf(mascotSvg(role, pose, f, 2, true, skin, hat).source, theme)
+              for (const xy of at) {
+                const [x, y] = xy.split(',').map(Number) as [number, number]
+                for (const n of [`${x + 1},${y}`, `${x - 1},${y}`, `${x},${y + 1}`, `${x},${y - 1}`]) {
+                  if (at.has(n) || !gear.has(n)) continue
+                  const ratio = seenOn(paint.get(xy)!, paint.get(n)!)
+                  if (ratio < 1.5) bad.add(`${name} ${theme}: ${mark} at ${xy} beside ${n}, ${ratio.toFixed(2)}:1`)
+                }
+              }
+            }
+          }
+  expect([...bad]).toEqual([])
+})
+
+// keeping clear must not cost the marks their place: with nothing in the way
+// the "!" stays over the raised hand and the Z still rises as Clawd snores,
+// and in every outfit a mark holds its place instead of hopping about
+test("the bare Clawd keeps its '!' over the hand and its rising Z, and no outfit's mark wanders", () => {
+  const corner = (at: string[]) => {
+    const xy = at.map(s => s.split(',').map(Number) as [number, number])
+    return `${Math.min(...xy.map(p => p[0]))},${Math.min(...xy.map(p => p[1]))}`
+  }
+  for (const skin of ['crew', 'party'] as const) {
+    expect(markAt('!', 'clawd', 'alert', 0, true, skin)).toEqual(['17,0', '17,1', '17,2', '17,4'])
+    expect(corner(markAt('z', 'clawd', 'sleep', 0, true, skin))).toBe('12,0')
+    expect(corner(markAt('z', 'clawd', 'sleep', 1, true, skin))).toBe('13,-1')
+  }
+  for (const role of ['clawd', 'boss'] as const)
+    for (const skin of ['crew', 'party'] as const)
+      for (const hat of [undefined, 'hardhat', 'lantern', 'magnifier', 'goggles', 'quill', 'broom'] as const) {
+        const frames = Array.from({ length: 40 }, (_, f) => f)
+        // the "!" stands still; the Z has one place per beat of the snore
+        expect(new Set(frames.map(f => corner(markAt('!', role, 'alert', f, true, skin, hat)))).size).toBe(1)
+        for (const beat of [0, 1]) expect(new Set(frames.filter(f => f % 2 === beat).map(f => corner(markAt('z', role, 'sleep', f, true, skin, hat)))).size).toBe(1)
+      }
+})
+
+// ── Pale gear on a light card ───────────────────────────────────────────
+// What a character carries tells its role, so every pixel on the silhouette's
+// edge (one with the card on a side) must show on a light card: a white blade,
+// a cream beard, the codex's steel shell. Found by where they are drawn.
+
+/** The cells of a silhouette that have the card beside them, up, down or sideways. */
+const edgeOf = (cells: Set<string>) =>
+  [...cells].filter(xy => {
+    const [x, y] = xy.split(',').map(Number) as [number, number]
+    return [`${x + 1},${y}`, `${x - 1},${y}`, `${x},${y + 1}`, `${x},${y - 1}`].some(n => !cells.has(n))
+  })
+const ALL_HATS = [undefined, 'hardhat', 'lantern', 'magnifier', 'goggles', 'quill', 'broom'] as const
+const ALL_POSES = ['walk', 'jump', 'sleep', 'alert', 'shake'] as const
+const PANEL_ROLES = ['clawd', ...Object.keys(ROLES)] as Array<'clawd' | keyof typeof ROLES>
+
+test('every pixel on the edge of a sprite shows on a light card, in every role, skin, hat, pose and frame', () => {
+  const faint = new Set<string>()
+  let seen = 0
+  const check = (name: string, source: string, silhouette: Set<string>) => {
+    const light = paintOf(source, 'light')
+    for (const xy of edgeOf(silhouette)) {
+      seen++
+      const fill = light.get(xy)!
+      for (const card of CARDS.light) if (seenOn(fill, card) < 1.4) faint.add(`${name} at ${xy}: ${fill} ${seenOn(fill, card).toFixed(2)}:1 on ${card}`)
+    }
+  }
+  // the panel's characters, in both skins, bobbing
+  for (const skin of ['crew', 'party'] as const)
+    for (const role of PANEL_ROLES)
+      for (const f of [0, 1]) {
+        const px = spritePixels(role, true, f, undefined, skin)
+        check(`${skin} ${role}`, spriteSvg(role, 2, true, f, undefined, skin).source, new Set(px.map(p => `${p.x},${p.y}`)))
+      }
+  // the band's mascot: the body and its gear, not the marks (their own test)
+  for (const role of ['clawd', 'boss'] as const)
+    for (const skin of ['crew', 'party'] as const)
+      for (const hat of ALL_HATS)
+        for (const pose of ALL_POSES)
+          for (let f = 0; f < 40; f++) {
+            const px = mascotPixels(role, pose, f, false, skin, hat).filter(p => !p.mark)
+            check(`${role} ${skin} ${hat ?? 'bare'} ${pose} ${f}`, mascotSvg(role, pose, f, 2, false, skin, hat).source, new Set(px.map(p => `${p.x},${p.y}`)))
+          }
+  expect(seen).toBeGreaterThan(10000)
+  expect([...faint].slice(0, 10)).toEqual([])
+})
+
+test('a pale pixel framed by the sprite keeps its colour, and a toned one keeps its hue and holds still', () => {
+  const hue = (hex: string) => {
+    const [r, g, b] = [16, 8, 0].map(s => (parseInt(hex.slice(1), 16) >> s) & 255) as [number, number, number]
+    return r === g && g === b ? 'grey' : r >= b ? 'warm' : 'cool'
+  }
+  // the codex's face sits inside its shell: the shell's rim tones, its core and face do not
+  const codex = spritePixels('codex')
+  const cells = new Set(codex.map(p => `${p.x},${p.y}`))
+  const rim = new Set(edgeOf(cells))
+  const toned = codex.filter(p => p.tone && p.tone.light.toLowerCase() !== p.tone.dark.toLowerCase())
+  expect(toned.length).toBeGreaterThan(0)
+  for (const p of toned) expect(rim.has(`${p.x},${p.y}`)).toBe(true)
+  expect(codex.some(p => p.fill === '#E6E8EB' && !p.tone && !rim.has(`${p.x},${p.y}`))).toBe(true)
+  // each tone is the same hue, darker: steel stays cool, bone warm, white grey
+  // (the quill's highlight goes cream on purpose, the marks test pins it)
+  for (const skin of ['crew', 'party'] as const)
+    for (const role of PANEL_ROLES)
+      for (const p of spritePixels(role, false, 0, undefined, skin))
+        if (p.tone && !(role === 'scribe' && FEATHER.includes(`${p.x},${p.y}`))) {
+          expect({ role, dark: p.tone.dark, hue: hue(p.tone.light) }).toEqual({ role, dark: p.fill, hue: hue(p.tone.dark) })
+          expect(seenOn(p.tone.light, '#FFFFFF')).toBeGreaterThanOrEqual(seenOn(p.tone.dark, '#FFFFFF'))
+        }
+  // gear holds one tone through every frame of a pose: the bob, the steps and
+  // the shake move it, they do not re-tone it (found relative to the eye, or
+  // to the frame for gear the shake holds still at the edge, like the quill's)
+  const flicker = new Set<string>()
+  for (const role of ['clawd', 'boss'] as const)
+    for (const skin of ['crew', 'party'] as const)
+      for (const hat of ALL_HATS)
+        for (const pose of ALL_POSES) {
+          const tones = new Map<string, Set<string>>()
+          const frames = Array.from({ length: 40 }, (_, f) => mascotPixels(role, pose, f, false, skin, hat))
+          const at = (p: ReturnType<typeof mascotPixels>[number]) => `${p.x},${p.y},${p.fill},${p.tone?.light}`
+          const still = new Set(frames[0]!.map(at).filter(k => frames.every(px => px.some(p => at(p) === k))))
+          for (const px of frames) {
+            const eye = px.find(p => p.fill === '#1F1410' && !px.some(q => q.fill === '#1F1410' && q.x === p.x && q.y === p.y + 1))!
+            for (const p of px) {
+              const k = pose === 'shake' && still.has(at(p)) ? `@${p.x},${p.y}` : `${p.x - eye.x},${p.y - eye.y}`
+              ;(tones.get(k) ?? tones.set(k, new Set()).get(k)!).add(p.tone?.light ?? p.fill)
+            }
+          }
+          for (const [k, t] of tones) if (t.size > 1 && ![...t].includes(CLAY)) flicker.add(`${role} ${skin} ${hat ?? 'bare'} ${pose} ${k}: ${[...t]}`)
+        }
+  expect([...flicker]).toEqual([])
+})
+
 test('the desktop mascot paints the dark theme as the terminal does, but for the "!"', () => {
   // the dark art is mascotPixels' colours, the terminal's; only the "!" takes
-  // the desktop amber of its bar and title, which the terminal draws as ALERT
+  // the desktop amber of its bar and title, which the terminal draws as ALERT.
+  // A pale pixel's light tone leaves its dark colour as it was.
   for (const role of ['clawd', 'boss'] as const)
-    for (const hat of [undefined, 'magnifier', 'quill'] as const)
-      for (const pose of ['walk', 'jump', 'sleep', 'alert', 'shake'] as const)
-        for (const f of [0, 3, 7, 12, 19]) {
-          const px = mascotPixels(role, pose, f, true, 'crew', hat)
-          const want = new Map(px.map(p => [`${p.x},${p.y}`, p.fill]))
-          if (pose === 'alert') for (const y of [0, 1, 2, 4]) {
-            expect(want.get(`17,${y}`)).toBe(ALERT)
-            want.set(`17,${y}`, ALERT_THEMED.dark)
+    for (const skin of ['crew', 'party'] as const)
+      for (const hat of ALL_HATS)
+        for (const pose of ALL_POSES)
+          for (const f of [0, 3, 7, 12, 19]) {
+            const px = mascotPixels(role, pose, f, true, skin, hat)
+            const want = new Map(px.map(p => [`${p.x},${p.y}`, p.fill]))
+            if (pose === 'alert') for (const xy of markAt('!', role, pose, f, true, skin, hat)) {
+              expect(want.get(xy)).toBe(ALERT)
+              want.set(xy, ALERT_THEMED.dark)
+            }
+            expect(Object.fromEntries(paintOf(mascotSvg(role, pose, f, 2, true, skin, hat).source, 'dark'))).toEqual(Object.fromEntries(want))
           }
-          expect(Object.fromEntries(paintOf(mascotSvg(role, pose, f, 2, true, 'crew', hat).source, 'dark'))).toEqual(Object.fromEntries(want))
-        }
+  // the panel's characters too: their dark art is their pixels' own colours
+  for (const skin of ['crew', 'party'] as const)
+    for (const role of PANEL_ROLES)
+      for (const f of [0, 1]) {
+        const want = Object.fromEntries(spritePixels(role, true, f, undefined, skin).map(p => [`${p.x},${p.y}`, p.fill]))
+        expect(Object.fromEntries(paintOf(spriteSvg(role, 2, true, f, undefined, skin).source, 'dark'))).toEqual(want)
+      }
   // a sprite with nothing to tone carries no style at all
   expect(mascotSvg('clawd', 'walk').source).not.toContain('<style>')
 })
@@ -549,9 +731,12 @@ test('a failed tool turns the bar red for a moment', EN, async ($, on) => {
 // bar, the title, the alt and the "!" all say waiting in the one amber
 test('a question asked while the bar shakes turns it amber, not red', EN, async ($, on) => {
   resetGlide()
+  // the shake window (1.2 s) runs on this clock, not the machine's
+  const clock = mock.clock(on, { now: 1_000 })
   let fail = true
+  let ask = true
   ;(on as any)('tool.call', { tool: 'Bash' }, async () => (fail ? { isError: true, result: 'boom', text: 'boom' } : { result: 'ok', text: 'ok' }))
-  ;(on as any)('tool.check', async (_: any, e: any, next: any) => (e.tool === 'Bash' ? { decision: 'ask' } : next(e)))
+  ;(on as any)('tool.check', async (_: any, e: any, next: any) => (e.tool === 'Bash' && ask ? { decision: 'ask' } : next(e)))
   const barOf = async (ui: any) => (await ui.findAll({ type: 'Svg' })).find((s: any) => String(s.props.source).includes('viewBox="0 0 60 2"'))!
   const desktop = () => $.ui.mount({ plugin: 'pixel-crew', surface: 'desktop', component: 'AbovePrompt', props: BAND })
   const terminal = () => $.ui.mount({ plugin: 'pixel-crew', surface: 'terminal', component: 'AbovePrompt', props: { ...BAND, bodyColumns: 40 } })
@@ -566,6 +751,12 @@ test('a question asked while the bar shakes turns it amber, not red', EN, async 
   await ui.unmount()
   ui = await terminal()
   expect((await ui.find({ type: 'Text', text: /✗/ }))?.props.color).toBe(ERROR)
+  await ui.unmount()
+
+  // 0.6 s later the window is still open: alone, the bar is still red
+  await clock.advance(600)
+  ui = await desktop()
+  expect(String((await barOf(ui)).props.source)).toContain(ERROR)
   await ui.unmount()
 
   // still inside the shake window, a permission is asked
@@ -596,6 +787,20 @@ test('a question asked while the bar shakes turns it amber, not red', EN, async 
 
   // the status line says the same: "!", the waiting title, no %
   expect(statusLine({ title: 'Waiting for your permission', target: 0.4, count: '', pose: 'alert', delegating: false, shaking: true, crew: 0 })).toBe('! Waiting for your permission')
+
+  // past the window, with the permission answered: neither red nor amber
+  await clock.advance(1_000)
+  ask = false
+  await ($.tool.call as any)({ tool: 'Bash', input: { command: 'ls build' }, tool_use_id: 'tu-2' })
+  ui = await desktop()
+  bar = String((await barOf(ui)).props.source)
+  expect(bar).not.toContain(ERROR)
+  expect(bar).not.toContain(ALERT_THEMED.dark)
+  expect(bar).not.toContain(ALERT_THEMED.light)
+  await ui.unmount()
+  ui = await terminal()
+  expect(await ui.find({ type: 'Text', text: /Waiting for your permission/ })).toBeUndefined()
+  await ui.unmount()
 })
 
 test('/crew-bar turns the band off and on', EN, async ($, on) => {
@@ -724,7 +929,9 @@ test('the terminal panel draws each subagent as pixel art, not glyphs', EN, asyn
 })
 
 test('the terminal band is one line: the mascot walks inside the bar', EN, async ($, on) => {
+  on('config.set', { key: 'theme' }, (_$: any, e: any) => ({ value: e.value }))
   await boss($, on)
+  await $.config.set({ key: 'theme', value: 'dark' })
   for (const maxRows of [10, 4]) {
     const ui = await $.ui.mount({ plugin: 'pixel-crew', surface: 'terminal', component: 'AbovePrompt', props: { ...BAND, maxRows } })
     const raster = await ui.find({ type: 'Raster' })
@@ -736,7 +943,7 @@ test('the terminal band is one line: the mascot walks inside the bar', EN, async
     expect(await ui.find({ text: /▐▛█▜▌/ })).toBeUndefined()
     const icon = await ui.find({ type: 'Text', text: /♛/ })
     expect(icon?.text).toBe('♛')
-    expect(String(icon?.props.color).toLowerCase()).toBe('#6a4be0')
+    expect(String(icon?.props.color).toLowerCase()).toBe(symbolTone('#6A4BE0', 'dark').toLowerCase())
     expect(await ui.find({ text: /1\/2/ })).toBeDefined()
     await ui.unmount()
   }
@@ -761,7 +968,9 @@ test('before any tool the band shows no symbol; a failure adds the ✗ mark', EN
 })
 
 test('the band symbol is the kind of work Claude just did, in that role\'s colour', EN, async ($, on) => {
+  on('config.set', { key: 'theme' }, (_$: any, e: any) => ({ value: e.value }))
   for (const tool of ['Edit', 'Write', 'Grep', 'Bash']) (on as any)('tool.call', { tool }, async () => ({ result: 'ok', text: 'ok' }))
+  await $.config.set({ key: 'theme', value: 'dark' })
   const symbol = async (tool: string, input: any) => {
     await ($.tool.call as any)({ tool, input })
     const ui = await $.ui.mount({ plugin: 'pixel-crew', surface: 'terminal', component: 'AbovePrompt', props: BAND })
@@ -770,23 +979,27 @@ test('the band symbol is the kind of work Claude just did, in that role\'s colou
     await ui.unmount()
     return out
   }
-  expect(await symbol('Edit', { file_path: '/x/app.ts', old_string: 'a', new_string: 'b' })).toEqual(['⌨', '#378ADD'])
-  expect(await symbol('Write', { file_path: '/x/theme.css', content: 'a{}' })).toEqual(['✎', '#D4537E'])
-  expect(await symbol('Grep', { pattern: 'x' })).toEqual(['⌕', '#B8864E'])
-  expect(await symbol('Bash', { command: 'yarn test', description: 'Run the tests' })).toEqual(['✓', '#F07A1E'])
-  expect(await symbol('Bash', { command: 'codex exec review', description: 'Ask Codex' })).toEqual(['⚡', '#10A37F'])
-  expect(await symbol('Bash', { command: 'ls', description: 'List files' })).toEqual(['⚒', '#639922'])
+  expect(await symbol('Edit', { file_path: '/x/app.ts', old_string: 'a', new_string: 'b' })).toEqual(['⌨', symbolTone('#378ADD', 'dark').toUpperCase()])
+  expect(await symbol('Write', { file_path: '/x/theme.css', content: 'a{}' })).toEqual(['✎', symbolTone('#D4537E', 'dark').toUpperCase()])
+  expect(await symbol('Grep', { pattern: 'x' })).toEqual(['⌕', symbolTone('#B8864E', 'dark').toUpperCase()])
+  expect(await symbol('Bash', { command: 'yarn test', description: 'Run the tests' })).toEqual(['✓', symbolTone('#F07A1E', 'dark').toUpperCase()])
+  expect(await symbol('Bash', { command: 'codex exec review', description: 'Ask Codex' })).toEqual(['⚡', symbolTone('#10A37F', 'dark').toUpperCase()])
+  expect(await symbol('Bash', { command: 'ls', description: 'List files' })).toEqual(['⚒', symbolTone('#639922', 'dark').toUpperCase()])
 })
 
 test('each terminal panel row shows its role symbol, greyed once finished', EN, async ($, on) => {
+  on('config.set', { key: 'theme' }, (_$: any, e: any) => ({ value: e.value }))
   await boss($, on)
+  await $.config.set({ key: 'theme', value: 'dark' })
   const ui = await $.ui.mount({ plugin: 'pixel-crew', surface: 'terminal', component: 'Pane', requestId: 'pixel-crew-agents', props: PANE } as any)
-  // 'Design the logo' is still running: the artist's brush in pink
+  // 'Design the logo' is still running: the artist's brush in pink, at the dark theme's tone
   const brush = await ui.find({ type: 'Text', text: /^✎$/ })
-  expect(String(brush?.props.color).toUpperCase()).toBe('#D4537E')
-  // 'Build the page' finished: the developer's keyboard, faded toward grey
+  expect(String(brush?.props.color).toUpperCase()).toBe(symbolTone('#D4537E', 'dark').toUpperCase())
+  expect(brush?.props.dimColor).toBeFalsy()
+  // 'Build the page' finished: the developer's keyboard, dimmed in the same readable tone
   const keys = await ui.find({ type: 'Text', text: /^⌨$/ })
-  expect(String(keys?.props.color).toUpperCase()).toBe(fade('#378ADD').toUpperCase())
+  expect(String(keys?.props.color).toUpperCase()).toBe(symbolTone('#378ADD', 'dark').toUpperCase())
+  expect(keys?.props.dimColor).toBe(true)
   await ui.unmount()
 })
 
@@ -1017,8 +1230,10 @@ test('prices and context windows follow the model', async () => {
 })
 
 test('a council agent shows its persona, stage character and colour', EN, async ($, on) => {
+  on('config.set', { key: 'theme' }, (_$: any, e: any) => ({ value: e.value }))
   let n = 0
   on('agent.spawn', async () => ({ model: 'claude-opus-5-5', agentId: 'c-' + ++n }))
+  await $.config.set({ key: 'theme', value: 'dark' })
   await $.agent.spawn({ prompt: 'p', description: 'propose:dot', subagentType: 'general-purpose' } as any)
   await $.agent.spawn({ prompt: 'p', description: 'vote:vex', subagentType: 'general-purpose' } as any)
   await $.agent.spawn({ prompt: 'p', description: 'build:P13', subagentType: 'general-purpose' } as any)
@@ -1036,8 +1251,8 @@ test('a council agent shows its persona, stage character and colour', EN, async 
     expect(voter?.props.color).toBe('text')
     expect(await ui.find({ text: 'developer' })).toBeDefined()
     if (surface === 'terminal') {
-      expect((await ui.find({ type: 'Text', text: ROLE_SYMBOL.researcher }))?.props.color).toBe(PERSONAS.dot!.color)
-      expect((await ui.find({ type: 'Text', text: ROLE_SYMBOL.voter }))?.props.color).toBe(PERSONAS.vex!.color)
+      expect((await ui.find({ type: 'Text', text: ROLE_SYMBOL.researcher }))?.props.color).toBe(symbolTone(PERSONAS.dot!.color, 'dark'))
+      expect((await ui.find({ type: 'Text', text: ROLE_SYMBOL.voter }))?.props.color).toBe(symbolTone(PERSONAS.vex!.color, 'dark'))
     }
     if (surface === 'desktop') {
       const sprites = (await ui.findAll({ type: 'Svg' })).map(s => String(s.props.source))

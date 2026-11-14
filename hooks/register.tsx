@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { PcActiveJob, PcAgent, PcFx, PcJob, PcMain, PcPendingJob, PcResult, PcRetired, PcRole, PcRound, PcSkin, PcTask } from '../types'
 import { ago, allJobs, findJob, hatOf, jobOfPrompt, jobPrompt, parseAdd, resultLine } from './quickrun'
-import { ALERT, ALERT_THEMED, bandRaster, barRaster, barSvg, CLAY, fade, mascotSvg, MAX_RASTER_COLUMNS, ROLES, roleLabel, roleSymbol, spriteRaster, spriteSvg } from './art'
+import { ALERT, ALERT_THEMED, bandRaster, barRaster, barSvg, CLAY, fade, mascotSvg, MAX_RASTER_COLUMNS, ROLES, roleLabel, roleSymbol, shadeOf, spriteRaster, spriteSvg, symbolTone } from './art'
 
 // terminal art budgets: the fewest columns worth drawing a band, a panel bar or
 // the text beside a sprite, and the title room the band keeps before its art
@@ -102,6 +102,9 @@ const activeJob = atom({ plugin: 'pixel-crew', key: 'activeJob' } as const, null
 // a job's prompt typed while a turn ran: it waits its turn, and turn.start makes it the active job
 const pendingJob = atom({ plugin: 'pixel-crew', key: 'pendingJob' } as const, null)
 const results = atom({ plugin: 'pixel-crew', key: 'results' } as const, {})
+// o fundo do terminal pelo tema do Claude Code ('' enquanto não se sabe, ou
+// com 'auto'): o símbolo do papel fica no 'text' até o tema dizer
+const shade = atom({ plugin: 'pixel-crew', key: 'shade' } as const, '')
 
 /** `/crew-skin party|crew`, or nothing to switch: the look asked for. */
 export function parseSkin(args: string, current: PcSkin): PcSkin {
@@ -124,7 +127,9 @@ export const ERROR = '#E24B4A'
  * The role or persona name under a row is plain text for the same reason: no
  * role or persona hex reaches 4.5:1 on both cards (Pip #B9D23C was 1.54:1 on
  * #F5F4EF), and the host has no theme key per role. Its colour stays on what
- * is drawn in it: the sprite, the symbol and the bar.
+ * is drawn in it: the sprite, the symbol and the bar. The terminal's symbol is
+ * text as well, so it takes that colour at the tone the person's theme reads
+ * (symbolTone in art.ts), or 'text' when the theme is 'auto'.
  */
 export const INK = { done: 'success', failed: 'error', active: 'text', role: 'text' } as const
 
@@ -146,6 +151,12 @@ export function glide(target: number, t = Date.now()): number {
   settling = shown !== target
   return shown
 }
+
+/**
+ * The time on the engine's clock, which a test can mock, else the machine's:
+ * the shake and the celebration windows are set and read by it.
+ */
+const nowOf = ($: EngineInterface) => $.clock.now().catch(() => Date.now())
 
 /** Esquece onde a barra estava: o próximo desenho vai direto ao progresso. */
 export function resetGlide() {
@@ -520,7 +531,7 @@ async function isBusy($: EngineInterface): Promise<boolean> {
  * band draws it; the status line (for the mobile app, which draws no band)
  * says it in one line. `appWorking` is the app's own word that a turn runs.
  */
-async function bandView($: EngineInterface, appWorking: boolean, t = Date.now()): Promise<BandView | null> {
+async function bandView($: EngineInterface, appWorking: boolean, t: number): Promise<BandView | null> {
   const list = await read($, tasks)
   const crew = await read($, agents)
   // the ×N button counts the agents the panel's totals count: its rows and the ones folded off them
@@ -610,7 +621,7 @@ async function updateStatus($: EngineInterface) {
   let text: string | undefined
   const councilRound = (await $.state.get(councilBand as never)).value as CouncilBand
   if ((await read($, bandOn)) && !(councilRound && !councilRound.isFinished)) {
-    const view = await bandView($, false)
+    const view = await bandView($, false, await nowOf($))
     if (view) text = statusLine(view, await read($, skin))
   }
   if (text !== undefined && !(await $.session.surfaces()).includes('mobile')) text = undefined
@@ -660,6 +671,10 @@ export const register: Register = (on, options) => {
     if (savedSkin === 'party' || savedSkin === 'crew') await update($, skin, () => savedSkin)
     const savedResults = await $.store.get('results').catch(() => undefined)
     if (savedResults && typeof savedResults === 'object' && !Array.isArray(savedResults)) await update($, results, () => savedResults as Record<string, PcResult>)
+    // o tema escolhido no /config diz em que fundo o terminal desenha
+    const rows = await $.config.list().catch(() => [])
+    const theme = Array.isArray(rows) ? rows.find(r => r?.key === 'theme') : undefined
+    await update($, shade, () => shadeOf(theme?.value) ?? '')
 
     // Relógio da animação: troca o quadro 30x por segundo enquanto há agent
     // rodando ou tarefa em andamento; parado, não escreve nada.
@@ -676,7 +691,7 @@ export const register: Register = (on, options) => {
         const list2 = await read($, tasks)
         const working = (await read($, main)).working || list2.some(t => t.status === 'in_progress')
         const effects = await read($, fx)
-        const t0 = Date.now()
+        const t0 = await nowOf($)
         // comemoração, tremida e a barra deslizando também animam; com um
         // quadro a mais no fim, para a faixa sumir quando a comemoração acaba
         const band = await read($, bandOn)
@@ -731,6 +746,17 @@ export const register: Register = (on, options) => {
     })
 
     return next(e)
+  })
+
+  // the theme changed in /config: the role symbols follow it. The change is
+  // the person's, so this only listens: next's answer goes back untouched,
+  // and nothing here can stop it
+  on('config.set', { key: 'theme' }, async ($, e, next) => {
+    const result = await next(e)
+    try {
+      if (result && !('deny' in result)) await update($, shade, () => shadeOf(result.value) ?? '')
+    } catch {}
+    return result
   })
 
   on('command.run', { command: 'crew' }, async $ => {
@@ -971,10 +997,11 @@ export const register: Register = (on, options) => {
         await $.store.set('results', kept).catch(() => {})
       }
       const crewBusy = (await read($, agents).catch(() => [] as PcAgent[])).some(a => a.status === 'running')
+      const t = await nowOf($)
       await update($, fx, f => ({
         ...f,
         asking: null,
-        celebrateUntil: ok && !crewBusy && celebration !== 'off' ? Date.now() + CELEBRATE[celebration] : 0,
+        celebrateUntil: ok && !crewBusy && celebration !== 'off' ? t + CELEBRATE[celebration] : 0,
       })).catch(() => {})
     }
     return next(e)
@@ -1036,8 +1063,9 @@ export const register: Register = (on, options) => {
     // respondida (ou recusada) a pergunta ou a permissão, o "!" sai; uma
     // ferramenta do agent principal que falhou faz o mascote tremer
     const failed = !agentId && (r as any).isError === true
+    const t = await nowOf($)
     await update($, fx, f =>
-      f.asking || failed ? { ...f, asking: null, errorUntil: failed ? Date.now() + SHAKE_MS : f.errorUntil } : f,
+      f.asking || failed ? { ...f, asking: null, errorUntil: failed ? t + SHAKE_MS : f.errorUntil } : f,
     ).catch(() => {})
     if (!agentId) {
       await update($, main, m => (m.working ? { ...m, activity: L.thinking } : m)).catch(() => {})
@@ -1079,7 +1107,8 @@ export const register: Register = (on, options) => {
     const councilRound = (await $.state.get(councilBand as never)).value as CouncilBand
     if (councilRound && !councilRound.isFinished && !(await $.state.get(councilBandHidden as never)).value) return next(e)
     if (e.props.hasSurvey) return next(e)
-    const t = Date.now()
+    // the effect windows (shake, celebration) run on the engine's clock
+    const t = await nowOf($)
     const view = await bandView($, e.props.isWorking, t)
     if (!view) return next(e)
     const { title, count, pose, delegating, shaking } = view
@@ -1134,7 +1163,8 @@ export const register: Register = (on, options) => {
       const mood = { walk: '', jump: '✦', sleep: 'zz', alert: '!', shake: '✗' }[pose]
       const who = delegating ? 'boss' : view.role
       const icon = [who ? roleSymbol(who, look) : '', mood].filter(Boolean).join(' ')
-      const iconColor = alerting ? alertInk : shaking ? color : !who ? color : ROLES[who].color
+      // the role's hue, at the tone the person's theme reads it in, or 'text'
+      const iconColor = alerting ? alertInk : shaking ? color : !who ? color : symbolTone(ROLES[who].color, shadeOf(await read($, shade)))
       const showIcon = icon !== '' && budget >= icon.length + 1 + 1 + TITLE_MIN
       if (showIcon) budget -= icon.length + 1
       // o título (e a arte ao lado dele) ocupa o resto, menos a coluna antes da
@@ -1276,6 +1306,7 @@ export const register: Register = (on, options) => {
     const expanded = await read($, showDone)
     // the crew's look (/crew-skin): each row's label, symbol and sprite follow it
     const look = await read($, skin)
+    const termShade = shadeOf(await read($, shade))
     const els: any = $.ui.resolve(e)
     const { Box, Text, Button } = els
     const isTerm = e.surface === 'terminal'
@@ -1383,7 +1414,7 @@ export const register: Register = (on, options) => {
             <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
               <Box flexDirection="row" justifyContent="space-between" gap={1}>
                 <Box flexDirection="row" gap={1} flexShrink={1} minWidth={0} overflow="hidden">
-                  <Text color={done ? fade(tint) : tint}>{roleSymbol(a.role, look)}</Text>
+                  <Text color={symbolTone(tint, termShade)} dimColor={done}>{roleSymbol(a.role, look)}</Text>
                   {title}
                 </Box>
                 <Text color={markColor}>{mark}</Text>
