@@ -157,6 +157,8 @@ declare module 'claude-code' {
       pendingJob: PcPendingJob | null
       /** each quick-run job's last result, by job name (kept in $.store too) */
       results: Record<string, PcResult>
+      /** the background the person's Claude Code theme draws on, '' when it doesn't say (unknown or 'auto') */
+      shade: '' | 'dark' | 'light'
     }
   }
 }

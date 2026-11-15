@@ -406,8 +406,6 @@ export type Sprite = { source: string; width: number; height: number }
  */
 export function spriteSvg(role: PcRole | "clawd", px = 2, bob = false, frame = 0, body?: string, skin: PcSkin = "crew"): Sprite {
   const g = grid(role, skin)
-  // a council persona's colour paints the body (X) in place of the clay
-  const paint = (ch: string) => (ch === "X" && body ? body : PAL[ch])
   let top = H
   let bottom = 0
   let left = W
@@ -421,15 +419,7 @@ export function spriteSvg(role: PcRole | "clawd", px = 2, bob = false, frame = 0
       right = Math.max(right, c)
     }),
   )
-  const dy = bob && frame % 2 === 1 ? -1 : 0
-  const pixels: Pixel[] = []
-  g.forEach((row, r) =>
-    row.forEach((ch, c) => {
-      const fill = paint(ch)
-      if (fill) pixels.push({ x: c, y: r + dy, fill, tone: ch === "X" ? undefined : markTones().pal[ch] })
-    }),
-  )
-  const rects = pixelRects(pixels)
+  const rects = pixelRects(spritePixels(role, bob, frame, body, skin))
   // uma linha a mais em cima para o pulo
   const vw = right - left + 1
   const vh = bottom - top + 2
@@ -440,6 +430,22 @@ export function spriteSvg(role: PcRole | "clawd", px = 2, bob = false, frame = 0
     width,
     height,
   }
+}
+
+/** The panel character's pixels, which spriteSvg draws: the grid, bobbed. */
+export function spritePixels(role: PcRole | "clawd", bob = false, frame = 0, body?: string, skin: PcSkin = "crew"): Pixel[] {
+  const g = grid(role, skin)
+  // a council persona's colour paints the body (X) in place of the clay
+  const paint = (ch: string) => (ch === "X" && body ? body : PAL[ch])
+  const dy = bob && frame % 2 === 1 ? -1 : 0
+  const pixels: Pixel[] = []
+  g.forEach((row, r) =>
+    row.forEach((ch, c) => {
+      const fill = paint(ch)
+      if (fill) pixels.push({ x: c, y: r + dy, fill, tone: ch === "X" ? undefined : toneOf(g, c, r, ch) })
+    }),
+  )
+  return pixels
 }
 
 /**
@@ -458,10 +464,77 @@ const CONFETTI_Y = [3, 0, 5, 2, 6, 1, 4, 0, 6, 3, 2, 5]
 /**
  * One pixel of the mascot. `fill` is what the terminal Raster paints; a mark
  * that must read on a light card too (the "!", the sleep Z, the confetti, the
- * quill's feather) also carries `tone`, the colour per theme the desktop SVG
- * paints instead.
+ * quill's feather, a pale pixel on the sprite's edge) also carries `tone`, the
+ * colour per theme the desktop SVG paints instead.
  */
-export type Pixel = { x: number; y: number; fill: string; tone?: Themed }
+export type Pixel = { x: number; y: number; fill: string; tone?: Themed; mark?: '!' | 'z' }
+
+// the "!" (three pixels and a dot) and the Z as cells from their top-left corner
+const BANG_CELLS: Array<[number, number]> = [[0, 0], [0, 1], [0, 2], [0, 4]]
+const Z_CELLS = Z_GLYPH.flatMap((row, j) => [...row].flatMap((ch, i): Array<[number, number]> => (ch === 'X' ? [[i, j]] : [])))
+// where each mark may stand, best first: the "!" over the raised hand (x=17),
+// else the nearest column to its left with room, a row higher if need be; the
+// Z rising from (12,0) to (13,-1) beside the head, else still in one of them,
+// else on the open left side, away from what the hand holds up
+const BANG_SPOTS: Array<[number, number]> = [17, 16, 15, 14, 13, 12].flatMap((x): Array<[number, number]> => [[x, 0]]).concat([17, 16, 15, 14, 13, 12].map((x): [number, number] => [x, -1]))
+const Z_SPOTS: Array<Array<[number, number]>> = [
+  [[12, 0], [13, -1], [0, -1]],
+  [[13, -1], [12, 0], [0, -1]],
+]
+
+/**
+ * The first spot where the mark has a pixel of air all round: none of its
+ * cells on the sprite or 4-beside it, so it reads as its own shape and never
+ * as the tip of a broom, a lantern or a sceptre.
+ */
+function clearSpot(g: Grid, cells: Array<[number, number]>, spots: Array<[number, number]>): [number, number] {
+  const busy = (x: number, y: number) => {
+    const ch = g[y]?.[x]
+    return ch !== undefined && ch !== '.'
+  }
+  const air = ([x0, y0]: [number, number]) =>
+    cells.every(([i, j]) => [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]].every(([a, b]) => !busy(x0 + i + a!, y0 + j + b!)))
+  return spots.find(air) ?? spots[0]!
+}
+
+/**
+ * How far a shake moves the sprite without anything leaving the frame's
+ * columns 0 to 17: `want` (one pixel left or right) when the whole sprite fits
+ * there, else 0 when it fits the other way (the shake swings between the
+ * middle and the free side). When neither side has a free column (the quill's
+ * feather at 0, its ink pot at 17), the body still moves by `want` and `held`
+ * names the gear cells that hold still in every frame: each piece of gear
+ * (cells that differ from the bare Clawd, joined side by side) that touches
+ * column 0 or 17.
+ */
+function shakeOf(g: Grid, want: number): { dx: number; held: Set<string> } {
+  const held = new Set<string>()
+  if (!want) return { dx: 0, held }
+  const cols = g.flatMap(row => row.flatMap((ch, c) => (ch !== '.' ? [c] : [])))
+  const fits = (d: number) => Math.min(...cols) + d >= 0 && Math.max(...cols) + d <= W - 1
+  if (fits(want)) return { dx: want, held }
+  if (fits(-want)) return { dx: 0, held }
+  const bare = grid('clawd')
+  const gear = (x: number, y: number) => (g[y]?.[x] ?? '.') !== '.' && g[y]![x] !== bare[y]![x]
+  const seen = new Set<string>()
+  g.forEach((row, r) =>
+    row.forEach((_, c) => {
+      if (!gear(c, r) || seen.has(`${c},${r}`)) return
+      // one piece: the gear cells joined to this one
+      const piece: Array<[number, number]> = []
+      const todo: Array<[number, number]> = [[c, r]]
+      seen.add(`${c},${r}`)
+      while (todo.length) {
+        const [x, y] = todo.pop()!
+        piece.push([x, y])
+        for (const [a, b] of [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]] as Array<[number, number]>)
+          if (gear(a, b) && !seen.has(`${a},${b}`)) seen.add(`${a},${b}`), todo.push([a, b])
+      }
+      if (piece.some(([x]) => x === 0 || x === W - 1)) for (const [x, y] of piece) held.add(`${x},${y}`)
+    }),
+  )
+  return { dx: want, held }
+}
 
 /**
  * Os pixels do mascote numa pose e num quadro, no quadro fixo de 18x16 (y de
@@ -479,6 +552,10 @@ export function mascotPixels(role: 'clawd' | 'boss', pose: Pose, frame = 0, conf
   if (pose === 'sleep') {
     box(g, 'X', 6, 6, 8, 8)
     box(g, 'X', 11, 11, 8, 8)
+    // o chefe cochila: a coroa escorrega um pixel para a direita e o capuz do
+    // mestre arredonda as pontas, para o Z ter um pixel de ar ao lado da cabeça
+    if (role === 'boss' && skin === 'party') dot(g, '.', [5, 3], [12, 3])
+    else if (role === 'boss') for (let y = 3; y <= 5; y++) g[y]!.splice(5, 9, '.', ...g[y]!.slice(5, 13))
   }
   if (role === 'clawd' && pose === 'alert') {
     box(g, '.', 14, 15, 9, 10)
@@ -496,17 +573,27 @@ export function mascotPixels(role: 'clawd' | 'boss', pose: Pose, frame = 0, conf
   // o pulo para antes de a ponta do chapéu (a lupa, a pena) sair do quadro
   const top = g.findIndex(row => row.some(ch => ch !== '.'))
   const dy = pose === 'walk' ? -(step % 2) : pose === 'jump' ? Math.max(-[0, 1, 2, 1][step % 4]!, -1 - top) : 0
-  const dx = pose === 'shake' ? (Math.floor(frame / 2) % 2 ? 1 : -1) : 0
+  // o tremor: um pixel para cada lado, sem nada sair do quadro pelas colunas
+  // 0 e 17. Sem espaço de um lado, alterna entre o centro e o lado livre; sem
+  // espaço dos dois (a pena e o tinteiro), o corpo treme e a peça na borda
+  // fica parada
+  const want = pose === 'shake' ? (Math.floor(frame / 2) % 2 ? 1 : -1) : 0
+  const { dx, held } = shakeOf(g, want)
 
   const px: Pixel[] = []
   const marks = markTones()
-  const put = (x: number, y: number, fill: string, tone?: Themed) => px.push(tone ? { x, y, fill, tone } : { x, y, fill })
-  g.forEach((row, r) =>
-    row.forEach((ch, c) => {
-      const fill = PAL[ch]
-      if (fill) put(c + dx, r + dy, fill, marks.pal[ch])
-    }),
-  )
+  const put = (x: number, y: number, fill: string, tone?: Themed, mark?: '!' | 'z') =>
+    px.push(mark ? { x, y, fill, tone, mark } : tone ? { x, y, fill, tone } : { x, y, fill })
+  // the body first, then any held gear on top of where it slid
+  for (const still of [false, true])
+    g.forEach((row, r) =>
+      row.forEach((ch, c) => {
+        const fill = PAL[ch]
+        if (!fill || held.has(`${c},${r}`) !== still) return
+        if (!still && held.has(`${c + dx},${r}`)) return
+        put(still ? c : c + dx, r + dy, fill, toneOf(g, c, r, ch))
+      }),
+    )
   // o que o personagem ocupa neste quadro, para o confete passar por trás
   const body = (x: number, y: number) => {
     const ch = g[y - dy]?.[x - dx]
@@ -519,17 +606,17 @@ export function mascotPixels(role: 'clawd' | 'boss', pose: Pose, frame = 0, conf
       if (!body(x, y)) put(x, y, c, marks.confetti[c])
     })
   }
+  // the marks stand clear of the sprite (dx and dy are 0 in these poses)
   if (pose === 'sleep') {
-    const z = (x0: number, y0: number) =>
-      Z_GLYPH.forEach((row, j) => [...row].forEach((ch, i) => ch === 'X' && put(x0 + i, y0 + j, PAL.G!, marks.z)))
-    // o Z sobe e volta, como quem ronca
-    if (frame % 2) z(13, -1)
-    else z(12, 1)
+    // o Z sobe e volta, como quem ronca, onde houver ar para os dois lugares
+    const [x0, y0] = clearSpot(g, Z_CELLS, Z_SPOTS[frame % 2]!)
+    for (const [i, j] of Z_CELLS) put(x0 + i, y0 + j, PAL.G!, marks.z, 'z')
   }
   if (pose === 'alert') {
     // the terminal keeps ALERT, its bar's amber; the desktop paints the "!"
     // in ALERT_THEMED, the amber of its bar and title
-    for (const y of [0, 1, 2, 4]) put(17, y, PAL.Q!, ALERT_THEMED)
+    const [x0, y0] = clearSpot(g, BANG_CELLS, BANG_SPOTS)
+    for (const [i, j] of BANG_CELLS) put(x0 + i, y0 + j, PAL.Q!, ALERT_THEMED, '!')
   }
   return px
 }
@@ -558,18 +645,37 @@ export function mascotSvg(role: 'clawd' | 'boss', pose: Pose, frame = 0, px = 2,
  * than its vane, so the quill keeps its two tones. Computed on first use: the
  * contrast helpers are further down the file.
  */
-let markCache: { pal: Record<string, Themed>; z: Themed; confetti: Record<string, Themed> } | undefined
+let markCache: { pal: Record<string, Themed>; pale: Record<string, Themed>; z: Themed; confetti: Record<string, Themed> } | undefined
 function markTones() {
   if (markCache) return markCache
   const themed = (dark: string, min: number): Themed => ({ dark, light: readable(dark, LIGHT_CARDS, false, min) })
   const confetti: Record<string, Themed> = {}
   for (const c of CONFETTI) if (worst(c, LIGHT_CARDS) < MARK_MIN) confetti[c] = themed(c, MARK_MIN)
   const vane = themed(PAL.B!, FEATHER_MIN)
-  return (markCache = {
-    pal: { B: vane, b: { dark: PAL.b!, light: readable(PAL.N!, LIGHT_CARDS, false, MARK_MIN) } },
-    z: themed(PAL.G!, FILL_MIN),
-    confetti,
-  })
+  const pal: Record<string, Themed> = { B: vane, b: { dark: PAL.b!, light: readable(PAL.N!, LIGHT_CARDS, false, MARK_MIN) } }
+  // every other letter too pale for a light card, for the pixels on the edge (toneOf)
+  const pale: Record<string, Themed> = {}
+  for (const [ch, c] of Object.entries(PAL)) if (ch !== 'X' && !pal[ch] && worst(c, LIGHT_CARDS) < EDGE_MIN) pale[ch] = themed(c, EDGE_MIN)
+  return (markCache = { pal, pale, z: themed(PAL.G!, FILL_MIN), confetti })
+}
+
+/**
+ * A sprite pixel's colour per theme. The quill keeps its own tones (markTones);
+ * any other pale pixel with the card beside it (a cell to its side, above or
+ * below that the sprite leaves empty, or the grid's edge) goes a shade darker on
+ * a light card, in its own hue, until it shows (EDGE_MIN): steel stays cool and
+ * bone warm, and a white blade keeps its white core inside a pale grey rim. A
+ * pale pixel framed by the sprite on all four sides (the glasses, the codex's
+ * face) stays as it is. The edge is read off the grid the frame is drawn from,
+ * which a pose changes only in the body, so gear keeps one tone as it moves.
+ */
+function toneOf(g: Grid, x: number, y: number, ch: string): Themed | undefined {
+  const marks = markTones()
+  if (marks.pal[ch]) return marks.pal[ch]
+  const pale = marks.pale[ch]
+  if (!pale) return undefined
+  const open = (a: number, b: number) => (g[b]?.[a] ?? '.') === '.'
+  return open(x + 1, y) || open(x - 1, y) || open(x, y + 1) || open(x, y - 1) ? pale : undefined
 }
 
 /**
@@ -641,6 +747,9 @@ const ROW_STEP = 1.3
 // at this on every light card; the feather's vane, its outline, a step more
 const MARK_MIN = 1.5
 const FEATHER_MIN = 2
+// a pale sprite pixel on the silhouette's edge (a blade, a cap, a shell) shows
+// at this on a light card, a touch over the 1.4 a track needs
+const EDGE_MIN = 1.45
 
 const chan = (hex: string) => [16, 8, 0].map(s => (parseInt(hex.slice(1), 16) >> s) & 255)
 const lin = (v: number) => ((v /= 255) <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)
@@ -689,6 +798,32 @@ function readable(color: string, cards: readonly string[], lighten: boolean, min
     if (worst(c, cards) >= min) return c
   }
   return lighten ? '#FFFFFF' : '#000000'
+}
+
+// ── O símbolo do papel no terminal ──────────────────────────────────────
+// The terminal's role symbol is text, and no role or persona hex reaches 4.5:1
+// on both a dark and a light terminal (the two luminance ranges don't meet).
+// The host hands a ui.render no theme and no background, and has no theme key
+// per role; it does list the person's theme setting ($.config.list, 'theme').
+// So the symbol takes its role's hue at the tone that theme reads (dark: the
+// app's dark cards and #000000; light: the light cards and #FFFFFF), and the
+// host's 'text' key whenever the theme says nothing of its background ('auto'
+// follows the terminal, which the plugin can't see).
+export type TermShade = 'dark' | 'light'
+export const TERM_DARK = [...DARK_CARDS, '#000000'] as const
+export const TERM_LIGHT = [...LIGHT_CARDS] as const
+export const SYMBOL_MIN = 4.5
+
+/** Which background a Claude Code theme setting draws on: 'dark', 'light-ansi'… or unknown. */
+export function shadeOf(theme: unknown): TermShade | undefined {
+  if (typeof theme !== 'string') return undefined
+  return theme.startsWith('light') ? 'light' : theme.startsWith('dark') ? 'dark' : undefined
+}
+
+/** A role or persona colour as terminal text: its hue at 4.5:1 on that shade, or the 'text' key. */
+export function symbolTone(color: string, shade: TermShade | undefined): string {
+  if (!shade) return 'text'
+  return shade === 'dark' ? readable(color, TERM_DARK, true, SYMBOL_MIN) : readable(color, TERM_LIGHT, false, SYMBOL_MIN)
 }
 
 /** The least track alpha, from the floor up, that shows the track on every card. */
